@@ -145,6 +145,7 @@ foreach ($helperName in @(
     if (-not (Test-Path -LiteralPath $helperPath)) {
         throw "Desktop helper is missing: $helperPath"
     }
+    Copy-Item -LiteralPath $helperPath -Destination (Join-Path $installDir $helperName) -Force
     Copy-Item -LiteralPath $helperPath -Destination (Join-Path $resourcesDir $helperName) -Force
 }
 

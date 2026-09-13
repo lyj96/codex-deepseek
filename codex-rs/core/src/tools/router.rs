@@ -9,6 +9,9 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 #[cfg(test)]
 use crate::tools::handlers::ToolSearchHandlerCache;
+use crate::tools::handlers::multi_agents_spec::FOLLOWUP_EXTERNAL_TASK_TOOL_NAME;
+use crate::tools::handlers::multi_agents_spec::SEND_EXTERNAL_MESSAGE_TOOL_NAME;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
@@ -43,6 +46,14 @@ pub struct ToolCall {
 
 impl ToolCall {
     pub(crate) fn direct_source(&self) -> ToolCallSource {
+        if matches!(
+            self.tool_name.name.as_str(),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME
+                | SEND_EXTERNAL_MESSAGE_TOOL_NAME
+                | FOLLOWUP_EXTERNAL_TASK_TOOL_NAME
+        ) {
+            return ToolCallSource::DirectPlaintextMessage;
+        }
         if self.tool_name.namespace.as_deref() == Some("collaboration")
             && matches!(
                 self.tool_name.name.as_str(),

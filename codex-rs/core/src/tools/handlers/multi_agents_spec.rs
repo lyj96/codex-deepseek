@@ -12,6 +12,9 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 pub const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
+pub const SPAWN_EXTERNAL_AGENT_TOOL_NAME: &str = "spawn_external_agent";
+pub const SEND_EXTERNAL_MESSAGE_TOOL_NAME: &str = "send_external_message";
+pub const FOLLOWUP_EXTERNAL_TASK_TOOL_NAME: &str = "followup_external_task";
 const MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";

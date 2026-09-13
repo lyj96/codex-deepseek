@@ -12,6 +12,11 @@ explicit personal subagent role to use DeepSeek's official Responses API.
 - Cross-provider messages use ordinary plaintext Responses API user messages.
   OpenAI-only `agent_message` and `encrypted_content` items are not sent to
   DeepSeek.
+- The official multi-agent v2 tools keep their OpenAI-validated encrypted
+  schemas. This fork adds `spawn_external_agent`, `send_external_message`, and
+  `followup_external_task` variants whose message arguments are locally
+  readable so an external provider can receive them. Codex redacts those
+  plaintext arguments from tool logs.
 - A cross-provider child starts with a fresh context. The parent must put all
   necessary context in the delegated task.
 

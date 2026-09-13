@@ -1,5 +1,6 @@
 use crate::session::tests::update_turn_settings_for_test;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -56,7 +57,10 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::WaitForEnvironmentHandler;
+use crate::tools::handlers::multi_agents_spec::FOLLOWUP_EXTERNAL_TASK_TOOL_NAME;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
+use crate::tools::handlers::multi_agents_spec::SEND_EXTERNAL_MESSAGE_TOOL_NAME;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::router::ToolRouter;
@@ -2838,6 +2842,68 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
             Some(true)
         );
     }
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_role_tools_use_plaintext_message_schemas() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.agent_roles.insert(
+                "external_worker".to_string(),
+                crate::config::AgentRoleConfig {
+                    description: Some("External provider worker".to_string()),
+                    config_file: Some(PathBuf::from("external-worker.toml")),
+                    nickname_candidates: None,
+                },
+            );
+        });
+    })
+    .await;
+
+    for tool_name in [
+        SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+        SEND_EXTERNAL_MESSAGE_TOOL_NAME,
+        FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
+    ] {
+        let ToolSpec::Function(tool) = plan.visible_spec(tool_name) else {
+            panic!("expected {tool_name} function tool");
+        };
+        let properties = tool
+            .parameters
+            .properties
+            .as_ref()
+            .expect("tool should use object params");
+        assert_eq!(
+            properties
+                .get("message")
+                .and_then(|schema| schema.encrypted),
+            None
+        );
+        assert!(tool.description.contains("external model provider"));
+        assert!(tool.description.contains("redacted from tool logs"));
+    }
+
+    let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {
+        panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
+    };
+    let official_spawn = namespace
+        .tools
+        .iter()
+        .find_map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == "spawn_agent" => Some(tool),
+            _ => None,
+        })
+        .expect("official spawn_agent should remain available");
+    assert_eq!(
+        official_spawn
+            .parameters
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.get("message"))
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
 }
 
 #[tokio::test]

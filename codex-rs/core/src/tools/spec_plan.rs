@@ -41,7 +41,10 @@ use crate::tools::handlers::multi_agents::WaitAgentHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_spec::FOLLOWUP_EXTERNAL_TASK_TOOL_NAME;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
+use crate::tools::handlers::multi_agents_spec::SEND_EXTERNAL_MESSAGE_TOOL_NAME;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
@@ -1298,20 +1301,21 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
                 turn_context.config.multi_agent_v2.hide_spawn_agent_metadata;
+            let spawn_options = SpawnAgentToolOptions {
+                available_models: turn_context.available_models.clone(),
+                agent_type_description,
+                expose_agent_type: !turn_context.config.agent_roles.is_empty(),
+                hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
+                expose_spawn_agent_model_overrides: turn_context
+                    .config
+                    .multi_agent_v2
+                    .expose_spawn_agent_model_overrides,
+                multi_agent_version: turn_context.multi_agent_version,
+                usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
+            };
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(
-                    SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
-                        available_models: turn_context.available_models.clone(),
-                        agent_type_description,
-                        expose_agent_type: !turn_context.config.agent_roles.is_empty(),
-                        hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
-                        expose_spawn_agent_model_overrides: turn_context
-                            .config
-                            .multi_agent_v2
-                            .expose_spawn_agent_model_overrides,
-                        multi_agent_version: turn_context.multi_agent_version,
-                        usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
-                    }),
+                    SpawnAgentHandlerV2::new(spawn_options.clone()),
                     tool_namespace,
                 ),
                 exposure,
@@ -1341,6 +1345,37 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 multi_agent_v2_handler(ListAgentsHandlerV2, tool_namespace),
                 exposure,
             );
+            if turn_context
+                .config
+                .agent_roles
+                .values()
+                .any(|role| role.config_file.is_some())
+            {
+                registry.register_trusted_with_exposure(
+                    plaintext_external_agent_handler(
+                        SpawnAgentHandlerV2::new(spawn_options),
+                        SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+                        "Spawn an agent role that uses an external model provider. Set `agent_type` to the configured external role and `fork_turns` to `none`.",
+                    ),
+                    exposure,
+                );
+                registry.register_trusted_with_exposure(
+                    plaintext_external_agent_handler(
+                        SendMessageHandlerV2,
+                        SEND_EXTERNAL_MESSAGE_TOOL_NAME,
+                        "Queue a plaintext message for an agent that uses an external model provider.",
+                    ),
+                    exposure,
+                );
+                registry.register_trusted_with_exposure(
+                    plaintext_external_agent_handler(
+                        FollowupTaskHandlerV2,
+                        FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
+                        "Send a plaintext follow-up task to an agent that uses an external model provider.",
+                    ),
+                    exposure,
+                );
+            }
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
@@ -1462,6 +1497,86 @@ fn multi_agent_v2_handler(
             namespace: namespace.to_string(),
         }),
         None => Arc::new(handler),
+    }
+}
+
+fn plaintext_external_agent_handler(
+    handler: impl CoreToolRuntime + 'static,
+    tool_name: &'static str,
+    guidance: &'static str,
+) -> Arc<dyn CoreToolRuntime> {
+    Arc::new(PlaintextExternalAgentHandler {
+        handler: Arc::new(handler),
+        tool_name,
+        guidance,
+    })
+}
+
+struct PlaintextExternalAgentHandler {
+    handler: Arc<dyn CoreToolRuntime>,
+    tool_name: &'static str,
+    guidance: &'static str,
+}
+
+impl ToolExecutor<ToolInvocation> for PlaintextExternalAgentHandler {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(self.tool_name)
+    }
+
+    fn spec(&self) -> ToolSpec {
+        let ToolSpec::Function(mut tool) = self.handler.spec() else {
+            unreachable!("multi-agent v2 handlers must expose function tools");
+        };
+        tool.name = self.tool_name.to_string();
+        tool.description = format!(
+            "{} The message is readable by the local Codex client and redacted from tool logs.\n\n{}",
+            self.guidance, tool.description
+        );
+        if let Some(message_schema) = tool
+            .parameters
+            .properties
+            .as_mut()
+            .and_then(|properties| properties.get_mut("message"))
+        {
+            message_schema.encrypted = None;
+        }
+        ToolSpec::Function(tool)
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.handler.exposure()
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.handler.supports_parallel_tool_calls()
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        self.handler.search_info()
+    }
+
+    fn handle<'a>(&'a self, mut invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
+        invocation.source = crate::tools::context::ToolCallSource::DirectPlaintextMessage;
+        self.handler.handle(invocation)
+    }
+}
+
+impl CoreToolRuntime for PlaintextExternalAgentHandler {
+    fn wait_until_ready<'a>(&'a self, session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
+        self.handler.wait_until_ready(session)
+    }
+
+    fn matches_kind(&self, payload: &crate::tools::context::ToolPayload) -> bool {
+        self.handler.matches_kind(payload)
+    }
+
+    fn create_diff_consumer(
+        &self,
+    ) -> Option<Box<dyn crate::tools::registry::ToolArgumentDiffConsumer>> {
+        self.handler.create_diff_consumer()
     }
 }
 

@@ -773,6 +773,27 @@ async fn get_model_info_uses_custom_catalog() {
 }
 
 #[tokio::test]
+async fn get_model_info_prefers_config_catalog_over_manager_catalog() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![remote_model("gpt-manager", "Manager", /*priority*/ 0)],
+    });
+    let mut external = remote_model("deepseek-v4-pro", "DeepSeek V4 Pro", /*priority*/ 0);
+    external.supports_image_detail_original = true;
+    let config = ModelsManagerConfig {
+        model_catalog: Some(ModelsResponse {
+            models: vec![external],
+        }),
+        ..Default::default()
+    };
+
+    let model_info = manager.get_model_info("deepseek-v4-pro", &config).await;
+
+    assert_eq!(model_info.display_name, "DeepSeek V4 Pro");
+    assert!(model_info.supports_image_detail_original);
+    assert!(!model_info.used_fallback_model_metadata);
+}
+
+#[tokio::test]
 async fn get_model_info_matches_namespaced_suffix() {
     let config = ModelsManagerConfig::default();
     let mut remote = remote_model("gpt-image", "Image", /*priority*/ 0);

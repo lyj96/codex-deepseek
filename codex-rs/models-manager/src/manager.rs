@@ -192,7 +192,13 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         Box::pin(
             async move {
                 let remote_models = self.get_remote_models().await;
-                construct_model_info_from_candidates(model, &remote_models, config)
+                let candidates = config
+                    .model_catalog
+                    .as_ref()
+                    .map_or(remote_models.as_slice(), |catalog| {
+                        catalog.models.as_slice()
+                    });
+                construct_model_info_from_candidates(model, candidates, config)
             }
             .instrument(tracing::info_span!("get_model_info", model = model)),
         )
