@@ -61,11 +61,14 @@ fn communication_from_tool_message(
     message: String,
     source: &crate::tools::context::ToolCallSource,
     trigger_turn: bool,
+    allow_openai_encrypted_content: bool,
 ) -> InterAgentCommunication {
-    if !matches!(
-        source,
-        crate::tools::context::ToolCallSource::DirectPlaintextMessage
-    ) {
+    if allow_openai_encrypted_content
+        && !matches!(
+            source,
+            crate::tools::context::ToolCallSource::DirectPlaintextMessage
+        )
+    {
         return InterAgentCommunication::new_encrypted(
             author,
             recipient,

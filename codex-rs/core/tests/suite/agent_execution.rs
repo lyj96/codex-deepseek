@@ -1,7 +1,9 @@
 use anyhow::Result;
+use codex_core::config::AgentRoleConfig;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
@@ -15,6 +17,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -201,6 +204,110 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
         "collab spawn failed: agent thread limit reached"
     );
     assert_eq!(test.thread_manager.list_thread_ids().await.len(), 2);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn personal_role_routes_child_to_external_responses_provider() -> Result<()> {
+    const EXTERNAL_MODEL: &str = "deepseek-test";
+    const EXTERNAL_ROLE: &str = "deepseek_worker";
+
+    let root_server = start_mock_server().await;
+    let external_server = start_mock_server().await;
+    mount_root_collaboration_call(
+        &root_server,
+        FIRST_PROMPT,
+        "external-spawn",
+        "spawn_agent",
+        json!({
+            "message": FIRST_TASK,
+            "task_name": "external",
+            "agent_type": EXTERNAL_ROLE,
+        }),
+    )
+    .await;
+    let external_request = mount_sse_once(
+        &external_server,
+        sse(vec![
+            ev_response_created("external-response"),
+            ev_assistant_message("external-message", "external worker completed"),
+            ev_completed("external-response"),
+        ]),
+    )
+    .await;
+
+    let external_base_url = format!("{}/v1", external_server.uri());
+    let mut builder = test_codex()
+        .with_model("gpt-5.5")
+        .with_config(move |config| {
+            config.features.enable(Feature::Collab).unwrap();
+            config.features.enable(Feature::MultiAgentV2).unwrap();
+
+            let mut external_provider = config.model_provider.clone();
+            external_provider.name = "DeepSeek test provider".to_string();
+            external_provider.base_url = Some(external_base_url);
+            external_provider.env_key = Some("PATH".to_string());
+            external_provider.requires_openai_auth = false;
+            external_provider.supports_websockets = false;
+            config
+                .model_providers
+                .insert("deepseek".to_string(), external_provider);
+
+            let agents_dir = config.codex_home.join("agents");
+            std::fs::create_dir_all(&agents_dir).expect("create personal agents directory");
+            let mut catalog = bundled_models_response().expect("bundled catalog should parse");
+            catalog.models.truncate(1);
+            catalog.models[0].slug = EXTERNAL_MODEL.to_string();
+            catalog.models[0].display_name = EXTERNAL_MODEL.to_string();
+            std::fs::write(
+                agents_dir.join("deepseek-models.json"),
+                serde_json::to_string(&catalog).expect("serialize external model catalog"),
+            )
+            .expect("write external model catalog");
+            let role_path = agents_dir.join("deepseek-worker.toml");
+            std::fs::write(
+                &role_path,
+                format!(
+                    "model = \"{EXTERNAL_MODEL}\"\nmodel_provider = \"deepseek\"\nmodel_catalog_json = \"deepseek-models.json\"\n"
+                ),
+            )
+            .expect("write personal agent role");
+            config.agent_roles.insert(
+                EXTERNAL_ROLE.to_string(),
+                AgentRoleConfig {
+                    description: Some("External provider worker".to_string()),
+                    config_file: Some(role_path.to_path_buf()),
+                    nickname_candidates: None,
+                },
+            );
+        });
+    let test = builder.build(&root_server).await?;
+    test.submit_turn(FIRST_PROMPT).await?;
+
+    let child_id = test
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|thread_id| *thread_id != test.session_configured.thread_id)
+        .expect("external child thread should exist");
+    let child = test.thread_manager.get_thread(child_id).await?;
+    wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = external_request.single_request();
+    let body = request.body_json();
+    assert_eq!(body["model"], json!(EXTERNAL_MODEL));
+    let input = body["input"].as_array().expect("request input array");
+    assert!(input.iter().any(|item| {
+        item["type"] == "message" && item["role"] == "user" && item.to_string().contains(FIRST_TASK)
+    }));
+    assert!(!input.iter().any(|item| item["type"] == "agent_message"));
+    assert!(
+        !serde_json::to_string(input)
+            .expect("serialize request input")
+            .contains("encrypted_content")
+    );
 
     Ok(())
 }

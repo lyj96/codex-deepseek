@@ -92,6 +92,17 @@ pub(super) async fn handle_message_string_tool(
         .ensure_v2_agent_loaded(resume_config, receiver_thread_id, /*parent*/ None)
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+    let receiver_provider_id = session
+        .services
+        .agent_control
+        .get_agent_config_snapshot(receiver_thread_id)
+        .await
+        .map(|snapshot| snapshot.model_provider_id)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "target agent provider is unavailable after loading".to_string(),
+            )
+        })?;
     let author = turn
         .session_source
         .get_agent_path()
@@ -102,6 +113,8 @@ pub(super) async fn handle_message_string_tool(
         message,
         &source,
         mode.trigger_turn(),
+        turn.config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID
+            && receiver_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID,
     );
     let kind = match mode {
         MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,

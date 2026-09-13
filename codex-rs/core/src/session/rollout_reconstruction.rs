@@ -369,7 +369,10 @@ impl Session {
                     );
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
-                    let response_item = communication.to_model_input_item();
+                    let response_item = crate::agent_communication::model_input_item_for_provider(
+                        communication,
+                        &turn_context.config.model_provider_id,
+                    );
                     history.record_items(
                         std::iter::once(&response_item),
                         turn_context.model_info().truncation_policy.into(),

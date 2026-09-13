@@ -169,6 +169,37 @@ model_reasoning_effort = "minimal"
     role_name
 }
 
+async fn install_personal_cross_provider_role(turn: &mut TurnContext) -> String {
+    let role_name = "external-worker".to_string();
+    let role_dir = turn.config.codex_home.as_path().join("agents");
+    tokio::fs::create_dir_all(&role_dir)
+        .await
+        .expect("personal agent directory should be created");
+    let role_config_path = role_dir.join("external-worker.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"model = "external-code-model"
+model_provider = "ollama"
+model_reasoning_effort = "minimal"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let mut config = (*turn.config).clone();
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Personal external provider worker".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    role_name
+}
+
 fn set_turn_config(turn: &mut TurnContext, config: crate::config::Config) {
     turn.multi_agent_version = config.multi_agent_version_from_features();
     turn.config = Arc::new(config);
@@ -826,6 +857,70 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
     assert_eq!(snapshot.model, "gpt-5-role-override");
     assert_eq!(snapshot.model_provider_id, parent_provider_id);
     assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_personal_cross_provider_role(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "external",
+                "agent_type": role_name
+            })),
+        ))
+        .await
+        .expect("cross-provider spawn should use an isolated child by default");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn result should be json");
+    assert_eq!(result["task_name"], "/root/external");
+
+    let (agent_id, communication) = manager
+        .captured_ops()
+        .into_iter()
+        .find_map(|(thread_id, op)| match op {
+            Op::InterAgentCommunication { communication, .. }
+                if communication.recipient.as_str() == "/root/external" =>
+            {
+                Some((thread_id, communication))
+            }
+            _ => None,
+        })
+        .expect("spawned external agent should receive a task");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned external agent should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "external-code-model");
+    assert_eq!(snapshot.model_provider_id, "ollama");
+    assert!(communication.encrypted_content.is_none());
+    assert!(
+        communication
+            .content
+            .ends_with("Payload:\ninspect this repo")
+    );
 }
 
 #[tokio::test]

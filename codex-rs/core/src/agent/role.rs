@@ -22,6 +22,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -37,6 +38,8 @@ const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not availabl
 struct AgentRoleOverrides {
     developer_instructions: Option<String>,
     model: Option<String>,
+    model_provider: Option<String>,
+    model_catalog_json: Option<AbsolutePathBuf>,
     model_reasoning_effort: Option<ReasoningEffort>,
     model_reasoning_summary: Option<ReasoningSummary>,
     model_verbosity: Option<Verbosity>,
@@ -77,9 +80,16 @@ async fn apply_role_to_config_inner(
     };
     let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
     let role_config = deserialize_config_toml_with_base(role_layer_toml, &config.codex_home)?;
+    let allows_provider_routing = !is_built_in && is_personal_agent_role_file(config, config_file);
     let mut overrides = AgentRoleOverrides {
         developer_instructions: role_config.developer_instructions,
         model: role_config.model,
+        model_provider: allows_provider_routing
+            .then_some(role_config.model_provider)
+            .flatten(),
+        model_catalog_json: allows_provider_routing
+            .then_some(role_config.model_catalog_json)
+            .flatten(),
         model_reasoning_effort: role_config.model_reasoning_effort,
         model_reasoning_summary: role_config.model_reasoning_summary,
         model_verbosity: role_config.model_verbosity,
@@ -126,6 +136,18 @@ async fn apply_role_to_config_inner(
     }
     *config = role_overrides::build_next_config(config, role_layer_toml, &overrides)?;
     Ok(())
+}
+
+/// Provider changes are data-egress decisions. Only personal agent files may make them; project
+/// roles keep the existing bounded-role behavior and cannot redirect a child to another provider.
+fn is_personal_agent_role_file(config: &Config, config_file: &Path) -> bool {
+    let Ok(config_file) = std::fs::canonicalize(config_file) else {
+        return false;
+    };
+    let Ok(personal_agents_dir) = std::fs::canonicalize(config.codex_home.join("agents")) else {
+        return false;
+    };
+    config_file.starts_with(personal_agents_dir)
 }
 
 async fn load_role_layer_toml(
@@ -182,6 +204,18 @@ mod role_overrides {
     ) -> anyhow::Result<Config> {
         let mut next_config = config.clone();
         next_config.config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
+        if let Some(provider_id) = &overrides.model_provider {
+            let provider = next_config
+                .model_providers
+                .get(provider_id)
+                .cloned()
+                .ok_or_else(|| anyhow!("model provider `{provider_id}` is not configured"))?;
+            next_config.model_provider_id = provider_id.clone();
+            next_config.model_provider = provider;
+        }
+        if let Some(model_catalog_json) = &overrides.model_catalog_json {
+            next_config.model_catalog = Some(crate::config::load_catalog_json(model_catalog_json)?);
+        }
         if let Some(model) = &overrides.model {
             next_config.model = Some(model.clone());
         }

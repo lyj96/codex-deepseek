@@ -112,7 +112,8 @@ async fn handle_spawn_agent(
     let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
-    let fork_mode = args.fork_mode()?;
+    let mut fork_mode = args.fork_mode()?;
+    let fork_turns_was_explicit = args.fork_turns.is_some();
     let message = message_content(args.message)?;
     let role_name = args
         .agent_type
@@ -124,7 +125,7 @@ async fn handle_spawn_agent(
     let child_depth = next_thread_spawn_depth(&session_source);
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-    let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
+    let requested_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
     apply_requested_spawn_agent_model_overrides(
         &session,
         turn.as_ref(),
@@ -133,14 +134,27 @@ async fn handle_spawn_agent(
         args.reasoning_effort.clone(),
     )
     .await?;
-    if !is_full_history_fork || role_name.is_some() {
+    if !requested_full_history_fork || role_name.is_some() {
         apply_spawn_agent_role(&session, &mut config, role_name).await?;
-        if is_full_history_fork && config.developer_instructions.is_none() {
+        if requested_full_history_fork && config.developer_instructions.is_none() {
             config
                 .developer_instructions
                 .clone_from(&turn.developer_instructions);
         }
     }
+    let crosses_model_providers = config.model_provider_id != turn.config.model_provider_id;
+    if crosses_model_providers && fork_mode.is_some() {
+        if fork_turns_was_explicit {
+            return Err(FunctionCallError::RespondToModel(
+                "Cross-provider agents require `fork_turns` to be `none`; put the needed context in `message`."
+                    .to_string(),
+            ));
+        }
+        // The v2 default is a full-history fork, but opaque OpenAI history cannot be forwarded to
+        // external providers. An omitted fork setting therefore safely becomes a fresh child.
+        fork_mode = None;
+    }
+    let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
     apply_spawn_agent_service_tier(&session, &mut config).await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
 
@@ -175,6 +189,8 @@ async fn handle_spawn_agent(
         message,
         &source,
         /*trigger_turn*/ true,
+        !crosses_model_providers
+            && config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID,
     );
     let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
     let multi_agent_v2_usage_hints =

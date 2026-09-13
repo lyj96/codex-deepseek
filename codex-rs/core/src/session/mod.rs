@@ -15,6 +15,7 @@ use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
+use crate::agent_communication::model_input_item_for_provider;
 use crate::attestation::AttestationProvider;
 use crate::compact;
 use crate::compact::CompactedHistoryMetadata;
@@ -3672,7 +3673,8 @@ impl Session {
         turn_context: &TurnContext,
         communication: InterAgentCommunication,
     ) {
-        let response_item = communication.to_model_input_item();
+        let response_item =
+            model_input_item_for_provider(&communication, &turn_context.config.model_provider_id);
         let (items, _) = self.prepare_conversation_items_for_history(
             turn_context,
             std::slice::from_ref(&response_item),
