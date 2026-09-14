@@ -114,7 +114,7 @@ function Install-RemoteHost {
     )
 
     Assert-SshHost -Name $Name
-    $ssh = Get-Command ssh -CommandType Application -ErrorAction SilentlyContinue
+    $ssh = Get-Command ssh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $ssh) {
         throw "OpenSSH client 'ssh' is required."
     }
