@@ -1,0 +1,211 @@
+name: deepseek-release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "codex-v*.*.*-deepseek.*"
+
+permissions:
+  contents: read
+
+env:
+  CODEX_REPO_ROOT: ${{ github.workspace }}
+  CARGO_BUILD_JOBS: "2"
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_LTO: "false"
+  CARGO_PROFILE_RELEASE_STRIP: "symbols"
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      base: ${{ steps.version.outputs.base }}
+      revision: ${{ steps.version.outputs.revision }}
+      package: ${{ steps.version.outputs.package }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - id: version
+        name: Resolve release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' codex-rs/Cargo.toml | head -n1)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            if [[ ! "$tag" =~ ^codex-v([0-9]+\.[0-9]+\.[0-9]+)-deepseek\.([1-9][0-9]*)$ ]]; then
+              echo "Invalid release tag: $tag" >&2
+              exit 1
+            fi
+            base="${BASH_REMATCH[1]}"
+            revision="${BASH_REMATCH[2]}"
+            if [[ "$base" != "$workspace_version" ]]; then
+              echo "Tag base $base does not match Cargo workspace version $workspace_version" >&2
+              exit 1
+            fi
+            publish=true
+          else
+            base="$workspace_version"
+            revision=1
+            publish=false
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "package=$base+deepseek.$revision" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive_ext: zip
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            archive_ext: tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive_ext: tar.gz
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+        with:
+          toolchain: 1.95.0
+          targets: ${{ matrix.target }}
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+      - if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        name: Install Linux build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
+      - if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        with:
+          version: 0.14.0
+          use-cache: false
+      - if: runner.os == 'Linux'
+        name: Install musl build tools
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash .github/scripts/install-musl-build-tools.sh
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          archive="dist/codex-deepseek-package-${TARGET}.${ARCHIVE_EXT}"
+          package_dir="dist/package-${TARGET}"
+          args=(
+            scripts/build_codex_package.py
+            --target "$TARGET"
+            --package-version "$PACKAGE_VERSION"
+            --cargo-profile release
+            --package-dir "$package_dir"
+            --archive-output "$archive"
+            --force
+          )
+          if [[ "$TARGET" == *windows* ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+          if [[ "$TARGET" == *linux* ]]; then
+            export AWS_LC_SYS_NO_JITTER_ENTROPY=1
+            cargo build \
+              --manifest-path codex-rs/Cargo.toml \
+              --target "$TARGET" \
+              --release \
+              --bin bwrap
+            bwrap="codex-rs/target/$TARGET/release/bwrap"
+            export CODEX_BWRAP_SHA256="$(sha256sum "$bwrap" | awk '{print $1}')"
+            args+=(--bwrap-bin "$bwrap")
+          fi
+          python "${args[@]}"
+          if [[ "$TARGET" == *windows* ]]; then
+            codex_bin="$package_dir/bin/codex.exe"
+          else
+            codex_bin="$package_dir/bin/codex"
+          fi
+          "$codex_bin" --version
+          python -c 'import json, os, pathlib; data=json.loads(pathlib.Path(os.environ["PACKAGE_DIR"]).joinpath("codex-package.json").read_text()); assert data["version"] == os.environ["PACKAGE_VERSION"]'
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCHIVE_EXT: ${{ matrix.archive_ext }}
+          PACKAGE_VERSION: ${{ needs.version.outputs.package }}
+          PACKAGE_DIR: dist/package-${{ matrix.target }}
+          STABLE_GIT_COMMIT: ${{ github.sha }}
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: codex-deepseek-${{ matrix.target }}
+          path: dist/codex-deepseek-package-*
+          if-no-files-found: error
+
+  release:
+    needs:
+      - version
+      - build
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: codex-deepseek-*
+          path: dist
+          merge-multiple: true
+      - name: Add configuration and checksums
+        shell: bash
+        run: |
+          cp contrib/deepseek-subagents/deepseek-worker.toml dist/
+          cp contrib/deepseek-subagents/deepseek-models.json dist/
+          cp contrib/deepseek-subagents/README.md dist/QUICKSTART.zh-CN.md
+          cd dist
+          sha256sum * > SHA256SUMS
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_VERSION: ${{ needs.version.outputs.base }}
+          REVISION: ${{ needs.version.outputs.revision }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --title "Codex $BASE_VERSION + DeepSeek r$REVISION" \
+            --notes "基于 OpenAI Codex $BASE_VERSION，增加 DeepSeek 子 Agent 模型路由。下载对应平台的 package，并按 QUICKSTART.zh-CN.md 配置。发布包未使用商业代码签名。"

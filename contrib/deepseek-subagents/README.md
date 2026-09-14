@@ -1,77 +1,83 @@
-# Mixed OpenAI + DeepSeek subagents for Codex Desktop
+# Codex DeepSeek 快速开始
 
-This fork keeps the desktop task on its normal OpenAI model while allowing a
-subagent model whose name starts with `deepseek` to use DeepSeek's official
-Responses API.
+这个社区 Fork 保持主 Agent 使用 OpenAI 模型，并允许子 Agent 使用
+`deepseek-flash`、`deepseek-v4-pro` 等以 `deepseek` 开头的模型。
 
-## What the patch changes
+## 1. 下载
 
-- A role file under `~/.codex/agents/` may select `model_provider` and a
-  role-local `model_catalog_json`.
-- `spawn_external_agent` routes a requested model to the longest matching
-  configured external-provider prefix. For example, `deepseek-flash` selects
-  the `deepseek` provider without requiring an `agent_type` argument. The
-  personal role remains an internal source of provider settings and catalog
-  metadata.
-- Repository-defined agent roles cannot change provider or catalog. This keeps
-  an untrusted repository from silently sending code to a third party.
-- Cross-provider messages use ordinary plaintext Responses API user messages.
-  OpenAI-only `agent_message` and `encrypted_content` items are not sent to
-  DeepSeek.
-- The official multi-agent v2 tools keep their OpenAI-validated encrypted
-  schemas. This fork adds `spawn_external_agent`, `send_external_message`, and
-  `followup_external_task` variants whose message arguments are locally
-  readable so an external provider can receive them. Codex redacts those
-  plaintext arguments from tool logs.
-- A cross-provider child starts with a fresh context. The parent must put all
-  necessary context in the delegated task.
+从 [Releases](https://github.com/lyj96/codex-deepseek/releases/latest)
+下载对应平台的完整压缩包：
 
-## Install on Windows
+| 系统 | 文件 |
+| --- | --- |
+| Windows x64 | `codex-deepseek-package-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `codex-deepseek-package-aarch64-pc-windows-msvc.zip` |
+| macOS Intel | `codex-deepseek-package-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `codex-deepseek-package-aarch64-apple-darwin.tar.gz` |
+| Linux x64 | `codex-deepseek-package-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 | `codex-deepseek-package-aarch64-unknown-linux-musl.tar.gz` |
 
-Build `codex-cli` for `x86_64-pc-windows-gnu`, then run:
+解压后，入口位于 `bin/codex`；Windows 为 `bin/codex.exe`。
+发布包附带 `SHA256SUMS`，且没有商业代码签名。macOS 首次运行若被 Gatekeeper
+拦截，请在确认校验和后到“系统设置 → 隐私与安全性”中允许本次运行。
+
+## 2. 配置
+
+下载 Release 中的 `deepseek-worker.toml` 和 `deepseek-models.json`，保存到：
+
+```text
+~/.codex/agents/deepseek-worker.toml
+~/.codex/agents/deepseek-models.json
+```
+
+在 `~/.codex/config.toml` 末尾加入：
+
+```toml
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/"
+env_key = "DEEPSEEK_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+```
+
+设置 DeepSeek API Key：
+
+```powershell
+# Windows PowerShell
+[Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", "你的 API Key", "User")
+```
 
 ```bash
-rustup target add x86_64-pc-windows-gnu
-CARGO_PROFILE_RELEASE_LTO=false \
-  CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
-  CARGO_PROFILE_RELEASE_DEBUG=none \
-  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
-  RUSTFLAGS='-C link-arg=-Wl,--no-keep-memory' \
-  cargo build -p codex-cli --release --target x86_64-pc-windows-gnu --bin codex
-x86_64-w64-mingw32-strip \
-  target/x86_64-pc-windows-gnu/release/codex.exe
+# macOS / Linux
+export DEEPSEEK_API_KEY="你的 API Key"
 ```
 
-On Ubuntu/WSL, the linker is provided by the `gcc-mingw-w64-x86-64`
-package. Then run in Windows PowerShell:
+CLI 用户可直接运行解压目录中的 `bin/codex`。
+
+Codex Desktop 用户将 `CODEX_CLI_PATH` 指向上述入口，然后完全退出并重新打开桌面端：
 
 ```powershell
-& .\contrib\deepseek-subagents\install.ps1
-& .\contrib\deepseek-subagents\set-deepseek-key.ps1
+# Windows PowerShell
+[Environment]::SetEnvironmentVariable(
+  "CODEX_CLI_PATH",
+  "C:\你的绝对路径\bin\codex.exe",
+  "User"
+)
 ```
 
-The installer downloads only the model catalog embedded in DeepSeek's official
-Codex setup script. It does not replace the top-level Codex model, provider, or
-catalog. It copies the custom CLI to `%LOCALAPPDATA%\CodexDeepSeek\current`,
-sets the user-level `CODEX_CLI_PATH`, and backs up the existing Codex config.
-
-Fully quit and reopen Codex Desktop. Keep the main task on an OpenAI model, then
-ask it to use a `deepseek`-prefixed model for a self-contained subagent task.
-
-Example:
-
-> Use a subagent with model deepseek-flash to inspect this repository for
-> duplicated retry logic. Return findings only; do not edit files.
-
-The explicit `deepseek_worker` role remains supported for compatibility, but
-normal prompts do not need to mention it.
-
-To roll back the most recent installation:
-
-```powershell
-& .\contrib\deepseek-subagents\restore.ps1
+```bash
+# macOS
+launchctl setenv CODEX_CLI_PATH "/你的绝对路径/bin/codex"
+launchctl setenv DEEPSEEK_API_KEY "你的 API Key"
 ```
 
-The key helper never prints the key, but Windows user environment variables are
-stored as plaintext in the user's profile. Do not paste API keys into chat or
-commit them to the repository.
+## 3. 使用
+
+直接告诉主 Agent：
+
+> 使用 model 为 deepseek-flash、思考程度 max 的子 Agent 检查这个项目并汇报结果。
+
+支持的思考程度为 `low`、`high`、`max`。不需要指定 `agent_type`。
+
+发送给 DeepSeek 子 Agent 的任务内容和必要上下文会通过 DeepSeek API 处理。
