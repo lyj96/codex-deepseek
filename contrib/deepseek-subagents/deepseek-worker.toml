@@ -1,7 +1,0 @@
-name = "deepseek_worker"
-description = "External DeepSeek subagent. Use deepseek-flash or deepseek-v4-pro with low, high, or max reasoning effort."
-model = "deepseek-v4-pro"
-model_provider = "deepseek"
-model_catalog_json = "deepseek-models.json"
-model_reasoning_effort = "high"
-developer_instructions = "Complete the assigned task independently, verify the result, and report concise evidence to the parent agent. Rely on the task message and files in the shared workspace."

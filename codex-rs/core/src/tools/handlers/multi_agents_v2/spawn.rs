@@ -141,7 +141,6 @@ async fn handle_spawn_agent(
                 &mut config,
                 args.model.as_deref().unwrap_or_default(),
             )
-            .await
             .map_err(FunctionCallError::RespondToModel)?
             {
                 ExternalModelRoute::Applied { role_name } => routed_role_name = role_name,

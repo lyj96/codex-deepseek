@@ -499,7 +499,7 @@ async fn apply_personal_role_can_select_provider_and_model_catalog() {
     let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
     let mut catalog = bundled_models_response().expect("bundled catalog should parse");
     catalog.models.truncate(1);
-    catalog.models[0].slug = "deepseek-test".to_string();
+    catalog.models[0].slug = "external-test".to_string();
     let agents_dir = home.path().join("agents");
     tokio::fs::create_dir_all(&agents_dir)
         .await
@@ -512,16 +512,16 @@ async fn apply_personal_role_can_select_provider_and_model_catalog() {
     .expect("write catalog");
     let role_path = write_personal_role_config(
         &home,
-        "deepseek-worker.toml",
+        "external-worker.toml",
         r#"developer_instructions = "Stay focused"
-model = "deepseek-test"
+model = "external-test"
 model_provider = "ollama"
 model_catalog_json = "deepseek-models.json"
 "#,
     )
     .await;
     config.agent_roles.insert(
-        "deepseek_worker".to_string(),
+        "external_worker".to_string(),
         AgentRoleConfig {
             description: Some("External provider worker".to_string()),
             config_file: Some(role_path),
@@ -529,11 +529,11 @@ model_catalog_json = "deepseek-models.json"
         },
     );
 
-    apply_role_to_config(&mut config, Some("deepseek_worker"))
+    apply_role_to_config(&mut config, Some("external_worker"))
         .await
         .expect("personal role should apply");
 
-    assert_eq!(config.model.as_deref(), Some("deepseek-test"));
+    assert_eq!(config.model.as_deref(), Some("external-test"));
     assert_eq!(config.model_provider_id, "ollama");
     assert_eq!(
         config.model_provider,

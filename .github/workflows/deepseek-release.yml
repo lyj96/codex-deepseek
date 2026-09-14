@@ -72,20 +72,11 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             archive_ext: zip
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            archive_ext: zip
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            archive_ext: tar.gz
           - runner: macos-14
             target: aarch64-apple-darwin
             archive_ext: tar.gz
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
-            archive_ext: tar.gz
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
             archive_ext: tar.gz
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -123,6 +114,28 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: bash .github/scripts/install-musl-build-tools.sh
+      - if: runner.os == 'Windows'
+        name: Validate Windows installer
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path contrib/deepseek-subagents/install-windows.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            throw ($errors | Format-List | Out-String)
+          }
+      - if: runner.os == 'macOS'
+        name: Validate macOS installer
+        shell: bash
+        run: bash -n contrib/deepseek-subagents/install-macos.sh
+      - if: runner.os == 'Linux'
+        name: Validate Linux installer
+        shell: bash
+        run: bash -n contrib/deepseek-subagents/install-linux.sh
       - name: Build package
         shell: bash
         run: |
@@ -193,8 +206,10 @@ jobs:
       - name: Add configuration and checksums
         shell: bash
         run: |
-          cp contrib/deepseek-subagents/deepseek-worker.toml dist/
           cp contrib/deepseek-subagents/deepseek-models.json dist/
+          cp contrib/deepseek-subagents/install-windows.ps1 dist/
+          cp contrib/deepseek-subagents/install-macos.sh dist/
+          cp contrib/deepseek-subagents/install-linux.sh dist/
           cp contrib/deepseek-subagents/README.md dist/QUICKSTART.zh-CN.md
           cd dist
           sha256sum * > SHA256SUMS

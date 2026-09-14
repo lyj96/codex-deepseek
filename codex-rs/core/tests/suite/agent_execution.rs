@@ -1,5 +1,4 @@
 use anyhow::Result;
-use codex_core::config::AgentRoleConfig;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
@@ -15,6 +14,7 @@ use codex_protocol::protocol::TurnEnvironmentSelections;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -209,21 +209,21 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn personal_role_routes_child_to_external_responses_provider() -> Result<()> {
+async fn provider_prefix_routes_child_to_external_responses_provider() -> Result<()> {
     const EXTERNAL_MODEL: &str = "deepseek-test";
-    const EXTERNAL_ROLE: &str = "deepseek_worker";
 
     let root_server = start_mock_server().await;
     let external_server = start_mock_server().await;
-    mount_root_collaboration_call(
+    mount_root_function_call(
         &root_server,
         FIRST_PROMPT,
         "external-spawn",
-        "spawn_agent",
+        "spawn_external_agent",
         json!({
             "message": FIRST_TASK,
             "task_name": "external",
-            "agent_type": EXTERNAL_ROLE,
+            "model": EXTERNAL_MODEL,
+            "fork_turns": "none",
         }),
     )
     .await;
@@ -254,33 +254,17 @@ async fn personal_role_routes_child_to_external_responses_provider() -> Result<(
                 .model_providers
                 .insert("deepseek".to_string(), external_provider);
 
-            let agents_dir = config.codex_home.join("agents");
-            std::fs::create_dir_all(&agents_dir).expect("create personal agents directory");
+            let catalog_dir = config.codex_home.join("model-catalogs");
+            std::fs::create_dir_all(&catalog_dir).expect("create external model catalog directory");
             let mut catalog = bundled_models_response().expect("bundled catalog should parse");
             catalog.models.truncate(1);
             catalog.models[0].slug = EXTERNAL_MODEL.to_string();
             catalog.models[0].display_name = EXTERNAL_MODEL.to_string();
             std::fs::write(
-                agents_dir.join("deepseek-models.json"),
+                catalog_dir.join("deepseek.json"),
                 serde_json::to_string(&catalog).expect("serialize external model catalog"),
             )
             .expect("write external model catalog");
-            let role_path = agents_dir.join("deepseek-worker.toml");
-            std::fs::write(
-                &role_path,
-                format!(
-                    "model = \"{EXTERNAL_MODEL}\"\nmodel_provider = \"deepseek\"\nmodel_catalog_json = \"deepseek-models.json\"\n"
-                ),
-            )
-            .expect("write personal agent role");
-            config.agent_roles.insert(
-                EXTERNAL_ROLE.to_string(),
-                AgentRoleConfig {
-                    description: Some("External provider worker".to_string()),
-                    config_file: Some(role_path.to_path_buf()),
-                    nickname_candidates: None,
-                },
-            );
         });
     let test = builder.build(&root_server).await?;
     test.submit_turn(FIRST_PROMPT).await?;
@@ -310,6 +294,41 @@ async fn personal_role_routes_child_to_external_responses_provider() -> Result<(
     );
 
     Ok(())
+}
+
+async fn mount_root_function_call(
+    server: &wiremock::MockServer,
+    prompt: &'static str,
+    call_id: &'static str,
+    tool_name: &'static str,
+    arguments: serde_json::Value,
+) {
+    let response_id = format!("resp-{call_id}");
+    mount_sse_once_match(
+        server,
+        move |request: &wiremock::Request| body_contains(request, prompt),
+        sse(vec![
+            ev_response_created(&response_id),
+            ev_function_call(call_id, tool_name, &arguments.to_string()),
+            ev_completed(&response_id),
+        ]),
+    )
+    .await;
+
+    let completion_id = format!("resp-{call_id}-complete");
+    mount_sse_once_match(
+        server,
+        move |request: &wiremock::Request| has_function_call_output(request, call_id),
+        sse(vec![
+            ev_response_created(&completion_id),
+            ev_assistant_message(
+                &format!("msg-{call_id}-complete"),
+                &format!("{tool_name} complete"),
+            ),
+            ev_completed(&completion_id),
+        ]),
+    )
+    .await;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

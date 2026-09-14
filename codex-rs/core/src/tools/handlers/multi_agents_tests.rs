@@ -48,6 +48,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -202,21 +203,25 @@ model_reasoning_effort = "minimal"
     role_name
 }
 
-async fn install_personal_deepseek_role_with_catalog(turn: &mut TurnContext) -> String {
-    let role_name = "deepseek-worker".to_string();
-    let role_dir = turn.config.codex_home.as_path().join("agents");
-    tokio::fs::create_dir_all(&role_dir)
+async fn install_deepseek_provider_with_catalog(turn: &mut TurnContext) {
+    let catalog_dir = turn.config.codex_home.as_path().join("model-catalogs");
+    tokio::fs::create_dir_all(&catalog_dir)
         .await
-        .expect("personal agent directory should be created");
+        .expect("external model catalog directory should be created");
 
     let mut flash_model = turn.model_info().as_ref().clone();
     flash_model.slug = "deepseek-flash".to_string();
     flash_model.display_name = "DeepSeek Flash".to_string();
     flash_model.description = Some("Fast external coding model".to_string());
+    flash_model.supported_reasoning_levels = vec![ReasoningEffortPreset {
+        effort: ReasoningEffort::High,
+        description: "High reasoning effort".to_string(),
+    }];
+    flash_model.default_reasoning_level = Some(ReasoningEffort::High);
     let mut pro_model = flash_model.clone();
     pro_model.slug = "deepseek-v4-pro".to_string();
     pro_model.display_name = "DeepSeek V4 Pro".to_string();
-    let catalog_path = role_dir.join("deepseek-models.json");
+    let catalog_path = catalog_dir.join("deepseek.json");
     tokio::fs::write(
         &catalog_path,
         serde_json::to_vec_pretty(&ModelsResponse {
@@ -227,34 +232,12 @@ async fn install_personal_deepseek_role_with_catalog(turn: &mut TurnContext) -> 
     .await
     .expect("external model catalog should be written");
 
-    let role_config_path = role_dir.join("deepseek-worker.toml");
-    tokio::fs::write(
-        &role_config_path,
-        r#"model = "deepseek-v4-pro"
-model_provider = "deepseek"
-model_catalog_json = "deepseek-models.json"
-model_reasoning_effort = "high"
-"#,
-    )
-    .await
-    .expect("role config should be written");
-
     let mut config = (*turn.config).clone();
     config.model_providers.insert(
         "deepseek".to_string(),
         built_in_model_providers(/* openai_base_url */ None)["ollama"].clone(),
     );
-    config.agent_roles.insert(
-        role_name.clone(),
-        AgentRoleConfig {
-            description: Some("Personal DeepSeek provider worker".to_string()),
-            config_file: Some(role_config_path),
-            nickname_candidates: None,
-        },
-    );
     turn.config = Arc::new(config);
-
-    role_name
 }
 
 fn set_turn_config(turn: &mut TurnContext, config: crate::config::Config) {
@@ -983,7 +966,7 @@ async fn multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
 #[tokio::test]
 async fn multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without_agent_type() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let role_name = install_personal_deepseek_role_with_catalog(&mut turn).await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
     let manager = thread_manager();
     let root = manager
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
@@ -1007,6 +990,7 @@ async fn multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without
                 "message": "inspect this repo",
                 "task_name": "deepseek_flash",
                 "model": "deepseek-flash",
+                "reasoning_effort": "high",
                 "fork_turns": "none"
             })),
         ))
@@ -1037,7 +1021,8 @@ async fn multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without
         .await;
     assert_eq!(snapshot.model, "deepseek-flash");
     assert_eq!(snapshot.model_provider_id, "deepseek");
-    assert_eq!(snapshot.session_source.get_agent_role(), Some(role_name));
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(snapshot.session_source.get_agent_role(), None);
     assert!(communication.encrypted_content.is_none());
 }
 

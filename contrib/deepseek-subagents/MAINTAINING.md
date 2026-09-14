@@ -29,4 +29,15 @@ git push origin deepseek codex-vX.Y.Z-deepseek.1
 ```
 
 The `deepseek-release` workflow publishes only after all supported platform
-packages build successfully.
+packages build successfully. The supported release targets are intentionally
+limited to:
+
+- `x86_64-pc-windows-msvc`
+- `aarch64-apple-darwin`
+- `x86_64-unknown-linux-musl`
+
+The installers keep the fork outside the official Codex installation and set a
+stable `CODEX_CLI_PATH`. Upstream updates therefore do not overwrite the fork,
+but app-server protocol changes can still require a matching fork build. For
+each new stable upstream tag, merge it, reset the DeepSeek revision to `.1`, and
+publish the matching release promptly.

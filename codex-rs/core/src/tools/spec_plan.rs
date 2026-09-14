@@ -1345,17 +1345,11 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 multi_agent_v2_handler(ListAgentsHandlerV2, tool_namespace),
                 exposure,
             );
-            if turn_context
-                .config
-                .agent_roles
-                .values()
-                .any(|role| role.config_file.is_some())
-            {
+            let external_models =
+                crate::agent::external_model_route::configured_model_presets(&turn_context.config);
+            if !external_models.is_empty() {
                 let mut external_spawn_options = spawn_options;
-                external_spawn_options.available_models =
-                    crate::agent::external_model_route::configured_model_presets(
-                        &turn_context.config,
-                    );
+                external_spawn_options.available_models = external_models;
                 registry.register_trusted_with_exposure(
                     plaintext_external_agent_handler(
                         SpawnAgentHandlerV2::new(external_spawn_options),

@@ -1,6 +1,5 @@
 use crate::session::tests::update_turn_settings_for_test;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -2845,18 +2844,26 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_external_role_tools_use_plaintext_message_schemas() {
+async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        let mut external_model = turn.model_info().as_ref().clone();
+        external_model.slug = "deepseek-test".to_string();
+        external_model.display_name = "DeepSeek Test".to_string();
+        let catalog_dir = turn.config.codex_home.join("model-catalogs");
+        std::fs::create_dir_all(&catalog_dir).expect("create external model catalog directory");
+        std::fs::write(
+            catalog_dir.join("deepseek.json"),
+            serde_json::to_vec(&codex_protocol::openai_models::ModelsResponse {
+                models: vec![external_model],
+            })
+            .expect("serialize external model catalog"),
+        )
+        .expect("write external model catalog");
         update_config(turn, |config| {
-            config.agent_roles.insert(
-                "external_worker".to_string(),
-                crate::config::AgentRoleConfig {
-                    description: Some("External provider worker".to_string()),
-                    config_file: Some(PathBuf::from("external-worker.toml")),
-                    nickname_candidates: None,
-                },
-            );
+            config
+                .model_providers
+                .insert("deepseek".to_string(), config.model_provider.clone());
         });
     })
     .await;
