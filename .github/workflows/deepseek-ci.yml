@@ -28,8 +28,8 @@ jobs:
           mkdir -p "$test_home/.ssh" "$test_home/.config/codex-deepseek" "$test_home/.local/bin"
           printf '%s\n' 'Host devbox *.example !blocked' '  HostName devbox.example.com' > "$test_home/.ssh/config"
           printf '%s\n' 'devbox' > "$test_home/.config/codex-deepseek/ssh-hosts"
-          linux_output="$(HOME="$test_home" bash contrib/deepseek-subagents/install-linux.sh --discover-ssh)"
-          macos_output="$(HOME="$test_home" bash contrib/deepseek-subagents/install-macos.sh --discover-ssh)"
+          linux_output="$(HOME="$test_home" XDG_CONFIG_HOME="$test_home/.config" bash contrib/deepseek-subagents/install-linux.sh --discover-ssh)"
+          macos_output="$(HOME="$test_home" XDG_CONFIG_HOME="$test_home/.config" bash contrib/deepseek-subagents/install-macos.sh --discover-ssh)"
           grep -F 'devbox (managed)' <<<"$linux_output"
           grep -F 'devbox (managed)' <<<"$macos_output"
           if grep -Fq '*.example' <<<"$linux_output"; then
