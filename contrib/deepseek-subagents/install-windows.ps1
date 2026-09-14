@@ -2,7 +2,11 @@
 param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "CodexDeepSeek"),
     [string]$DeepSeekKey,
-    [string]$ReleaseTag = "latest"
+    [string]$ReleaseTag = "latest",
+    [string]$SshHost,
+    [switch]$DiscoverSsh,
+    [switch]$UpdateRemotes,
+    [switch]$Yes
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,9 +14,203 @@ $repo = "lyj96/codex-deepseek"
 $asset = "codex-deepseek-package-x86_64-pc-windows-msvc.zip"
 $catalogAsset = "deepseek-models.json"
 $catalogName = "deepseek.json"
+$configRoot = if ($env:APPDATA) { $env:APPDATA } else { $env:LOCALAPPDATA }
+$managerDir = Join-Path $configRoot "CodexDeepSeek"
+$managedHostsFile = Join-Path $managerDir "ssh-hosts"
+
+function Assert-ReleaseTag {
+    if ($ReleaseTag -ne "latest" -and $ReleaseTag -notmatch '^codex-v\d+\.\d+\.\d+-deepseek\.[1-9]\d*$') {
+        throw "Invalid release tag: $ReleaseTag"
+    }
+}
+
+function Assert-SshHost {
+    param([Parameter(Mandatory)][string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name) -or $Name.StartsWith('-') -or $Name -notmatch '^[A-Za-z0-9_.@:-]+$') {
+        throw "Invalid SSH host or alias: $Name"
+    }
+}
+
+function Get-RemoteInstallerUrl {
+    if ($ReleaseTag -eq "latest") {
+        return "https://github.com/$repo/releases/latest/download/install-linux.sh"
+    }
+    return "https://github.com/$repo/releases/download/$ReleaseTag/install-linux.sh"
+}
+
+function Register-ManagedHost {
+    param([Parameter(Mandatory)][string]$Name)
+
+    New-Item -ItemType Directory -Path $managerDir -Force | Out-Null
+    if (-not (Test-Path -LiteralPath $managedHostsFile)) {
+        [IO.File]::WriteAllText($managedHostsFile, "", [Text.UTF8Encoding]::new($false))
+    }
+    $managed = @(Get-Content -LiteralPath $managedHostsFile | Where-Object { $_ })
+    if ($managed -notcontains $Name) {
+        [IO.File]::AppendAllText($managedHostsFile, $Name + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    }
+}
+
+function Get-DiscoveredSshHosts {
+    $sshConfig = Join-Path $env:USERPROFILE ".ssh\config"
+    if (-not (Test-Path -LiteralPath $sshConfig -PathType Leaf)) {
+        return @()
+    }
+    $candidates = foreach ($line in Get-Content -LiteralPath $sshConfig) {
+        $withoutComment = ($line -replace '#.*$', '').Trim()
+        if (-not $withoutComment) {
+            continue
+        }
+        $parts = @($withoutComment -split '\s+')
+        if ($parts.Count -lt 2 -or $parts[0] -ine 'Host') {
+            continue
+        }
+        foreach ($candidate in $parts[1..($parts.Count - 1)]) {
+            if ($candidate -notmatch '[*!?]' -and -not $candidate.StartsWith('!')) {
+                $candidate
+            }
+        }
+    }
+    return @($candidates | Sort-Object -Unique)
+}
+
+function Show-DiscoveredSshHosts {
+    $sshConfig = Join-Path $env:USERPROFILE ".ssh\config"
+    $candidates = @(Get-DiscoveredSshHosts)
+    if ($candidates.Count -eq 0) {
+        Write-Host "No concrete SSH host aliases found in: $sshConfig"
+        return
+    }
+    $managed = if (Test-Path -LiteralPath $managedHostsFile) { @(Get-Content -LiteralPath $managedHostsFile) } else { @() }
+    Write-Host "SSH host candidates from $sshConfig`:"
+    foreach ($candidate in $candidates) {
+        $suffix = if ($managed -contains $candidate) { " (managed)" } else { "" }
+        Write-Host "  $candidate$suffix"
+    }
+    Write-Host "Install and register one with: -SshHost HOST"
+}
+
+function Install-RemoteHost {
+    param([Parameter(Mandatory)][string]$Name)
+
+    Assert-SshHost -Name $Name
+    $ssh = Get-Command ssh -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $ssh) {
+        throw "OpenSSH client 'ssh' is required."
+    }
+    $installerUrl = Get-RemoteInstallerUrl
+    $remoteCommand = @'
+set -eu
+platform="$(uname -s)/$(uname -m)"
+if [ "$platform" != "Linux/x86_64" ]; then
+  echo "Unsupported remote platform: $platform (expected Linux/x86_64)" >&2
+  exit 1
+fi
+tmp="$(mktemp "${TMPDIR:-/tmp}/codex-deepseek-installer.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+curl -fL --retry 3 '__INSTALLER_URL__' -o "$tmp"
+chmod 700 "$tmp"
+bash "$tmp" --ssh-remote --release '__RELEASE_TAG__'
+'@
+    $remoteCommand = $remoteCommand.Replace('__INSTALLER_URL__', $installerUrl).Replace('__RELEASE_TAG__', $ReleaseTag)
+    Write-Host "Installing Codex DeepSeek on SSH host: $Name"
+    & $ssh.Source -t -- $Name $remoteCommand
+    if ($LASTEXITCODE -ne 0) {
+        throw "Remote installation failed for SSH host: $Name"
+    }
+    Register-ManagedHost -Name $Name
+    Write-Host "Registered managed SSH host: $Name"
+}
+
+function Update-ManagedRemoteHosts {
+    param([string]$DesiredPackageVersion)
+
+    if (-not (Test-Path -LiteralPath $managedHostsFile -PathType Leaf)) {
+        Write-Host "No managed SSH hosts. Register one with -SshHost HOST."
+        return
+    }
+    $managed = @(Get-Content -LiteralPath $managedHostsFile | Where-Object { $_ } | Sort-Object -Unique)
+    if ($managed.Count -eq 0) {
+        Write-Host "No managed SSH hosts. Register one with -SshHost HOST."
+        return
+    }
+    $failed = @()
+    foreach ($name in $managed) {
+        try {
+            Assert-SshHost -Name $name
+            $remoteVersion = & ssh -o BatchMode=yes -o ConnectTimeout=8 -- $name 'test -f "$HOME/.config/codex-deepseek/ssh-managed" && sed -n "s/^package_version=//p" "$HOME/.config/codex-deepseek/ssh-managed"' 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Host is unavailable or is no longer managed."
+            }
+            $remoteVersion = ([string]($remoteVersion | Select-Object -First 1)).Trim()
+            if ($DesiredPackageVersion -and $remoteVersion -eq $DesiredPackageVersion) {
+                Write-Host "Already current on SSH host: $name ($DesiredPackageVersion)"
+                continue
+            }
+            Install-RemoteHost -Name $name
+        }
+        catch {
+            Write-Warning "Skipping SSH host $name`: $($_.Exception.Message)"
+            $failed += $name
+        }
+    }
+    if ($failed.Count -gt 0) {
+        throw "One or more managed SSH hosts could not be updated: $($failed -join ', ')"
+    }
+}
+
+function Offer-RemoteUpdates {
+    param([string]$DesiredPackageVersion)
+
+    if (-not (Test-Path -LiteralPath $managedHostsFile -PathType Leaf)) {
+        return
+    }
+    $managed = @(Get-Content -LiteralPath $managedHostsFile | Where-Object { $_ } | Sort-Object -Unique)
+    if ($managed.Count -eq 0) {
+        return
+    }
+    $shouldUpdate = $Yes
+    if (-not $shouldUpdate) {
+        $answer = Read-Host "Update $($managed.Count) registered SSH host(s) with this release? [y/N]"
+        $shouldUpdate = $answer -match '^(?i:y|yes)$'
+    }
+    if ($shouldUpdate) {
+        try {
+            Update-ManagedRemoteHosts -DesiredPackageVersion $DesiredPackageVersion
+        }
+        catch {
+            Write-Warning $_.Exception.Message
+        }
+    }
+    else {
+        Write-Host "Remote hosts were not changed. Run again with -UpdateRemotes when ready."
+    }
+}
+
+Assert-ReleaseTag
+$sshModeCount = @($DiscoverSsh.IsPresent, $UpdateRemotes.IsPresent, -not [string]::IsNullOrWhiteSpace($SshHost)).Where({ $_ }).Count
+if ($sshModeCount -gt 1) {
+    throw "Choose only one SSH operation at a time."
+}
+if ($DiscoverSsh) {
+    Show-DiscoveredSshHosts
+    return
+}
+if (-not [string]::IsNullOrWhiteSpace($SshHost)) {
+    Install-RemoteHost -Name $SshHost
+    return
+}
+if ($UpdateRemotes) {
+    Update-ManagedRemoteHosts
+    return
+}
 
 if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [Runtime.InteropServices.Architecture]::X64) {
     throw "This installer only supports Windows x86_64."
+}
+if ([string]::IsNullOrWhiteSpace($DeepSeekKey)) {
+    $DeepSeekKey = [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY", "User")
 }
 if ([string]::IsNullOrWhiteSpace($DeepSeekKey)) {
     $secureKey = Read-Host "DeepSeek API Key" -AsSecureString
@@ -51,6 +249,7 @@ $catalogPath = Join-Path $tempDir $catalogAsset
 $checksumsPath = Join-Path $tempDir "SHA256SUMS"
 $currentDir = Join-Path $resolvedInstallDir "current"
 $backupDir = $null
+$packageVersion = $null
 
 try {
     New-Item -ItemType Directory -Path $tempDir, $stagingDir -Force | Out-Null
@@ -94,6 +293,11 @@ try {
             Move-Item -LiteralPath $backupDir -Destination $currentDir
         }
         throw
+    }
+    $packageManifestPath = Join-Path $currentDir "codex-package.json"
+    $packageVersion = [string](Get-Content -LiteralPath $packageManifestPath -Raw | ConvertFrom-Json).version
+    if ([string]::IsNullOrWhiteSpace($packageVersion)) {
+        throw "Installed package metadata does not contain a version."
     }
 
     $codexHome = Join-Path $env:USERPROFILE ".codex"
@@ -164,3 +368,5 @@ finally {
         Remove-Item -LiteralPath $tempDir -Recurse -Force
     }
 }
+
+Offer-RemoteUpdates -DesiredPackageVersion $packageVersion

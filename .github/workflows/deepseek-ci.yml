@@ -20,6 +20,68 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
+      - name: Validate shell installers
+        run: |
+          bash -n contrib/deepseek-subagents/install-linux.sh
+          bash -n contrib/deepseek-subagents/install-macos.sh
+          test_home="$RUNNER_TEMP/installer-smoke"
+          mkdir -p "$test_home/.ssh" "$test_home/.config/codex-deepseek" "$test_home/.local/bin"
+          printf '%s\n' 'Host devbox *.example !blocked' '  HostName devbox.example.com' > "$test_home/.ssh/config"
+          printf '%s\n' 'devbox' > "$test_home/.config/codex-deepseek/ssh-hosts"
+          linux_output="$(HOME="$test_home" bash contrib/deepseek-subagents/install-linux.sh --discover-ssh)"
+          macos_output="$(HOME="$test_home" bash contrib/deepseek-subagents/install-macos.sh --discover-ssh)"
+          grep -F 'devbox (managed)' <<<"$linux_output"
+          grep -F 'devbox (managed)' <<<"$macos_output"
+          if grep -Fq '*.example' <<<"$linux_output"; then
+            echo 'Wildcard SSH hosts must not be discovered.' >&2
+            exit 1
+          fi
+          original="$test_home/.local/bin/codex.before-deepseek.test"
+          wrapper="$test_home/codex-deepseek"
+          printf '%s\n' original > "$original"
+          printf '%s\n' wrapper > "$wrapper"
+          ln -s "$wrapper" "$test_home/.local/bin/codex"
+          printf '%s\n' "$wrapper" > "$test_home/.config/codex-deepseek/ssh-wrapper-path"
+          printf '%s\n' "$original" > "$test_home/.config/codex-deepseek/ssh-backup-path"
+          printf '%s\n' managed > "$test_home/.config/codex-deepseek/ssh-managed"
+          HOME="$test_home" bash contrib/deepseek-subagents/install-linux.sh --restore-ssh
+          grep -Fx original "$test_home/.local/bin/codex"
+      - name: Validate Windows installer
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path contrib/deepseek-subagents/install-windows.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            throw ($errors | Format-List | Out-String)
+          }
+          $originalUserProfile = $env:USERPROFILE
+          $originalAppData = $env:APPDATA
+          try {
+            $smokeHome = Join-Path $env:RUNNER_TEMP "installer-smoke-windows"
+            $env:USERPROFILE = $smokeHome
+            $env:APPDATA = Join-Path $smokeHome "AppData"
+            New-Item -ItemType Directory -Path (Join-Path $smokeHome ".ssh"), (Join-Path $env:APPDATA "CodexDeepSeek") -Force | Out-Null
+            [IO.File]::WriteAllLines(
+              (Join-Path $smokeHome ".ssh/config"),
+              @("Host devbox *.example !blocked", "  HostName devbox.example.com")
+            )
+            [IO.File]::WriteAllText(
+              (Join-Path $env:APPDATA "CodexDeepSeek/ssh-hosts"),
+              "devbox$([Environment]::NewLine)"
+            )
+            $output = (& ./contrib/deepseek-subagents/install-windows.ps1 -DiscoverSsh 6>&1 | Out-String)
+            if ($output -notmatch 'devbox \(managed\)' -or $output -match '\*\.example') {
+              throw "Windows SSH discovery smoke test failed: $output"
+            }
+          } finally {
+            $env:USERPROFILE = $originalUserProfile
+            $env:APPDATA = $originalAppData
+          }
       - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:

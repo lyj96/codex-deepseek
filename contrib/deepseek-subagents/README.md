@@ -49,6 +49,68 @@ curl -fsSL https://github.com/lyj96/codex-deepseek/releases/latest/download/inst
 codex-deepseek
 ```
 
+## SSH 远程项目
+
+Codex Desktop 的 SSH 项目使用远程主机上的 `codex`。目前远程自动安装支持
+Linux x86_64 服务器；DeepSeek Key 和配置保存在远程，不会从本机明文复制。
+
+先查看本机 `~/.ssh/config` 中可发现的主机：
+
+```powershell
+# Windows
+$s="$env:TEMP\install-codex-deepseek.ps1"; irm https://github.com/lyj96/codex-deepseek/releases/latest/download/install-windows.ps1 -OutFile $s; & $s -DiscoverSsh
+```
+
+```bash
+# macOS
+curl -fsSL https://github.com/lyj96/codex-deepseek/releases/latest/download/install-macos.sh | bash -s -- --discover-ssh
+
+# Linux
+curl -fsSL https://github.com/lyj96/codex-deepseek/releases/latest/download/install-linux.sh | bash -s -- --discover-ssh
+```
+
+首次在指定服务器安装并登记：
+
+```powershell
+# Windows
+& $s -SshHost devbox
+```
+
+```bash
+# macOS 使用 install-macos.sh
+bash install-macos.sh --ssh-host devbox
+
+# Linux 使用 install-linux.sh
+bash install-linux.sh --ssh-host devbox
+```
+
+已登记主机保存在 Windows 的 `%APPDATA%\CodexDeepSeek\ssh-hosts`，或 macOS/Linux 的
+`~/.config/codex-deepseek/ssh-hosts`。
+
+安装器通过 SSH 在远程终端隐藏提示输入 Key，备份远程原有的
+`~/.local/bin/codex`，再让该入口指向 Codex DeepSeek。安装完成后在 Codex Desktop
+中断开并重新连接这个 SSH 主机。
+
+以后正常更新本机时，安装器会询问是否同步更新已登记的远程主机。也可以只更新远程：
+
+```powershell
+& $s -UpdateRemotes
+```
+
+```bash
+# macOS 使用 install-macos.sh，Linux 使用 install-linux.sh
+bash install-linux.sh --update-remotes
+```
+
+无人值守时可加 `-Yes` / `--yes`。离线或未带有 Codex DeepSeek 管理标记的主机会被
+跳过，不会因为出现在 SSH 配置中就被修改；远程已是同一安装包版本时也不会重复安装。
+
+需要恢复远程原有的 `codex` 入口时，在远程服务器执行：
+
+```bash
+curl -fsSL https://github.com/lyj96/codex-deepseek/releases/latest/download/install-linux.sh | bash -s -- --restore-ssh
+```
+
 ## 使用
 
 直接告诉主 Agent：
