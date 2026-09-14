@@ -36,6 +36,22 @@ jobs:
             echo 'Wildcard SSH hosts must not be discovered.' >&2
             exit 1
           fi
+          mock_bin="$RUNNER_TEMP/mock-ssh-bin"
+          mkdir -p "$mock_bin"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            'IFS= read -r forwarded_key' \
+            '[[ "$forwarded_key" == "$EXPECTED_DEEPSEEK_KEY" ]]' \
+            '[[ "$*" == *"IFS= read -r DEEPSEEK_API_KEY"* ]]' \
+            > "$mock_bin/ssh"
+          chmod 700 "$mock_bin/ssh"
+          EXPECTED_DEEPSEEK_KEY='forwarded-test-key' DEEPSEEK_API_KEY='forwarded-test-key' \
+            PATH="$mock_bin:$PATH" HOME="$test_home" XDG_CONFIG_HOME="$test_home/.config" \
+            bash contrib/deepseek-subagents/install-linux.sh --ssh-host devbox
+          EXPECTED_DEEPSEEK_KEY='forwarded-test-key' DEEPSEEK_API_KEY='forwarded-test-key' \
+            PATH="$mock_bin:$PATH" HOME="$test_home" XDG_CONFIG_HOME="$test_home/.config" \
+            bash contrib/deepseek-subagents/install-macos.sh --ssh-host devbox
           original="$test_home/.local/bin/codex.before-deepseek.test"
           wrapper="$test_home/codex-deepseek"
           printf '%s\n' original > "$original"
@@ -62,6 +78,8 @@ jobs:
           $originalUserProfile = $env:USERPROFILE
           $originalAppData = $env:APPDATA
           $originalLocalAppData = $env:LOCALAPPDATA
+          $originalDeepSeekKey = $env:DEEPSEEK_API_KEY
+          $originalPath = $env:PATH
           try {
             $smokeHome = Join-Path $env:RUNNER_TEMP "installer-smoke-windows"
             $env:USERPROFILE = $smokeHome
@@ -80,10 +98,29 @@ jobs:
             if ($output -notmatch 'devbox \(managed\)' -or $output -match '\*\.example') {
               throw "Windows SSH discovery smoke test failed: $output"
             }
+            $mockBin = Join-Path $env:RUNNER_TEMP "mock-ssh-bin-windows"
+            New-Item -ItemType Directory -Path $mockBin -Force | Out-Null
+            $mockSsh = @(
+              '#!/usr/bin/env bash'
+              'set -euo pipefail'
+              'IFS= read -r forwarded_key'
+              'forwarded_key="$(printf "%s" "$forwarded_key" | tr -d "\r")"'
+              '[[ "$forwarded_key" == "$EXPECTED_DEEPSEEK_KEY" ]]'
+              '[[ "$*" == *"IFS= read -r DEEPSEEK_API_KEY"* ]]'
+            )
+            [IO.File]::WriteAllLines((Join-Path $mockBin "ssh"), $mockSsh)
+            & chmod 700 (Join-Path $mockBin "ssh")
+            $env:EXPECTED_DEEPSEEK_KEY = "forwarded-test-key"
+            $env:DEEPSEEK_API_KEY = "forwarded-test-key"
+            $env:PATH = "$mockBin$([IO.Path]::PathSeparator)$originalPath"
+            & ./contrib/deepseek-subagents/install-windows.ps1 -SshHost devbox
           } finally {
             $env:USERPROFILE = $originalUserProfile
             $env:APPDATA = $originalAppData
             $env:LOCALAPPDATA = $originalLocalAppData
+            $env:DEEPSEEK_API_KEY = $originalDeepSeekKey
+            $env:PATH = $originalPath
+            Remove-Item Env:EXPECTED_DEEPSEEK_KEY -ErrorAction SilentlyContinue
           }
       - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582

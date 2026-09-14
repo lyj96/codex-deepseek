@@ -39,6 +39,22 @@ function Get-RemoteInstallerUrl {
     return "https://github.com/$repo/releases/download/$ReleaseTag/install-linux.sh"
 }
 
+function Get-LocalDeepSeekKey {
+    param([string]$RequestedKey)
+
+    $key = $RequestedKey
+    if ([string]::IsNullOrWhiteSpace($key)) {
+        $key = $env:DEEPSEEK_API_KEY
+    }
+    if ([string]::IsNullOrWhiteSpace($key)) {
+        $key = [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY", "User")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($key) -and $key -match '[\r\n]') {
+        throw "DeepSeek API Key cannot contain a newline."
+    }
+    return $key
+}
+
 function Register-ManagedHost {
     param([Parameter(Mandatory)][string]$Name)
 
@@ -92,7 +108,10 @@ function Show-DiscoveredSshHosts {
 }
 
 function Install-RemoteHost {
-    param([Parameter(Mandatory)][string]$Name)
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [switch]$ForwardLocalKey
+    )
 
     Assert-SshHost -Name $Name
     $ssh = Get-Command ssh -CommandType Application -ErrorAction SilentlyContinue
@@ -100,6 +119,7 @@ function Install-RemoteHost {
         throw "OpenSSH client 'ssh' is required."
     }
     $installerUrl = Get-RemoteInstallerUrl
+    $forwardKey = if ($ForwardLocalKey) { Get-LocalDeepSeekKey -RequestedKey $DeepSeekKey } else { $null }
     $remoteCommand = @'
 set -eu
 platform="$(uname -s)/$(uname -m)"
@@ -115,7 +135,13 @@ bash "$tmp" --ssh-remote --release '__RELEASE_TAG__'
 '@
     $remoteCommand = $remoteCommand.Replace('__INSTALLER_URL__', $installerUrl).Replace('__RELEASE_TAG__', $ReleaseTag)
     Write-Host "Installing Codex DeepSeek on SSH host: $Name"
-    & $ssh.Source -t -- $Name $remoteCommand
+    if (-not [string]::IsNullOrWhiteSpace($forwardKey)) {
+        $remoteCommand = 'IFS= read -r DEEPSEEK_API_KEY; DEEPSEEK_API_KEY="$(printf ''%s'' "$DEEPSEEK_API_KEY" | tr -d ''\r'')"; export DEEPSEEK_API_KEY' + [Environment]::NewLine + $remoteCommand
+        $forwardKey | & $ssh.Source -- $Name $remoteCommand
+    }
+    else {
+        & $ssh.Source -t -- $Name $remoteCommand
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Remote installation failed for SSH host: $Name"
     }
@@ -198,7 +224,7 @@ if ($DiscoverSsh) {
     return
 }
 if (-not [string]::IsNullOrWhiteSpace($SshHost)) {
-    Install-RemoteHost -Name $SshHost
+    Install-RemoteHost -Name $SshHost -ForwardLocalKey
     return
 }
 if ($UpdateRemotes) {
@@ -209,9 +235,7 @@ if ($UpdateRemotes) {
 if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [Runtime.InteropServices.Architecture]::X64) {
     throw "This installer only supports Windows x86_64."
 }
-if ([string]::IsNullOrWhiteSpace($DeepSeekKey)) {
-    $DeepSeekKey = [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY", "User")
-}
+$DeepSeekKey = Get-LocalDeepSeekKey -RequestedKey $DeepSeekKey
 if ([string]::IsNullOrWhiteSpace($DeepSeekKey)) {
     $secureKey = Read-Host "DeepSeek API Key" -AsSecureString
     $keyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
@@ -300,7 +324,7 @@ try {
         throw "Installed package metadata does not contain a version."
     }
 
-    $codexHome = Join-Path $env:USERPROFILE ".codex"
+    $codexHome = if ($env:CODEX_HOME) { [IO.Path]::GetFullPath($env:CODEX_HOME) } else { Join-Path $env:USERPROFILE ".codex" }
     $modelCatalogDir = Join-Path $codexHome "model-catalogs"
     New-Item -ItemType Directory -Path $modelCatalogDir -Force | Out-Null
     Copy-Item -LiteralPath $catalogPath -Destination (Join-Path $modelCatalogDir $catalogName) -Force
@@ -353,6 +377,11 @@ supports_websockets = false
     $env:CODEX_DEEPSEEK_INSTALL_DIR = $resolvedInstallDir
     if (-not (($env:Path -split ';') | Where-Object { $_.TrimEnd('\') -ieq $launcherDir.TrimEnd('\') })) {
         $env:Path = "$launcherDir;$env:Path"
+    }
+
+    & $codexPath features enable multi_agent_v2 | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to enable multi_agent_v2."
     }
 
     Write-Host "Installed Codex DeepSeek to: $currentDir"

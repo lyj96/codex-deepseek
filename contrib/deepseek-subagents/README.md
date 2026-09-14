@@ -6,7 +6,8 @@
 
 ## 一键安装
 
-安装器会下载最新版、校验 SHA-256、配置 DeepSeek provider，并提示输入 API Key。
+安装器会下载最新版、校验 SHA-256、配置 DeepSeek provider、启用 `multi_agent_v2`，
+并提示输入 API Key。
 
 Windows x64（PowerShell）：
 
@@ -52,7 +53,8 @@ codex-deepseek
 ## SSH 远程项目
 
 Codex Desktop 的 SSH 项目使用远程主机上的 `codex`。目前远程自动安装支持
-Linux x86_64 服务器；DeepSeek Key 和配置保存在远程，不会从本机明文复制。
+Linux x86_64 服务器。首次安装时，安装器会优先把本机已有的 DeepSeek Key 通过加密的
+SSH 标准输入传给远程安装器；Key 不会出现在命令参数或日志中，并会独立保存在远程。
 
 先查看本机 `~/.ssh/config` 中可发现的主机：
 
@@ -87,9 +89,9 @@ bash install-linux.sh --ssh-host devbox
 已登记主机保存在 Windows 的 `%APPDATA%\CodexDeepSeek\ssh-hosts`，或 macOS/Linux 的
 `~/.config/codex-deepseek/ssh-hosts`。
 
-安装器通过 SSH 在远程终端隐藏提示输入 Key，备份远程原有的
-`~/.local/bin/codex`，再让该入口指向 Codex DeepSeek。安装完成后在 Codex Desktop
-中断开并重新连接这个 SSH 主机。
+如果本机还没有 Key，安装器会通过 SSH 在远程终端隐藏提示输入。随后它会备份远程原有的
+`~/.local/bin/codex`，让该入口指向 Codex DeepSeek，并显式启用 `multi_agent_v2`。
+安装完成后在 Codex Desktop 中断开并重新连接这个 SSH 主机。
 
 以后正常更新本机时，安装器会询问是否同步更新已登记的远程主机。也可以只更新远程：
 

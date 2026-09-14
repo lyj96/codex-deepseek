@@ -5,7 +5,7 @@ repo="lyj96/codex-deepseek"
 asset="codex-deepseek-package-aarch64-apple-darwin.tar.gz"
 catalog_asset="deepseek-models.json"
 install_dir="${HOME}/Library/Application Support/CodexDeepSeek"
-deepseek_key=""
+deepseek_key="${DEEPSEEK_API_KEY:-}"
 release_tag="latest"
 ssh_host=""
 discover_ssh=false
@@ -77,8 +77,19 @@ list_discovered_hosts() {
   echo "Install and register one with: --ssh-host HOST"
 }
 
+load_local_deepseek_key() {
+  if [[ -z "$deepseek_key" ]]; then
+    deepseek_key="$(security find-generic-password -a "$USER" -s codex-deepseek-api-key -w 2>/dev/null || true)"
+  fi
+  [[ "$deepseek_key" != *$'\n'* && "$deepseek_key" != *$'\r'* ]] || {
+    echo "DeepSeek API Key cannot contain a newline." >&2
+    exit 1
+  }
+}
+
 install_remote_host() {
   local host="$1"
+  local forward_key="${2:-}"
   local installer_url url_q tag_q remote_command
   validate_ssh_host "$host"
   command -v ssh >/dev/null 2>&1 || { echo "OpenSSH client 'ssh' is required." >&2; return 1; }
@@ -87,7 +98,12 @@ install_remote_host() {
   printf -v tag_q '%q' "$release_tag"
   remote_command="set -eu; platform=\$(uname -s)/\$(uname -m); if [ \"\$platform\" != Linux/x86_64 ]; then echo \"Unsupported remote platform: \$platform (expected Linux/x86_64)\" >&2; exit 1; fi; tmp=\$(mktemp \"\${TMPDIR:-/tmp}/codex-deepseek-installer.XXXXXX\"); trap 'rm -f \"\$tmp\"' EXIT; curl -fL --retry 3 $url_q -o \"\$tmp\"; chmod 700 \"\$tmp\"; bash \"\$tmp\" --ssh-remote --release $tag_q"
   echo "Installing Codex DeepSeek on SSH host: $host"
-  ssh -t -- "$host" "$remote_command"
+  if [[ -n "$forward_key" ]]; then
+    remote_command="IFS= read -r DEEPSEEK_API_KEY; DEEPSEEK_API_KEY=\$(printf '%s' \"\$DEEPSEEK_API_KEY\" | tr -d '\\r'); export DEEPSEEK_API_KEY; $remote_command"
+    printf '%s\n' "$forward_key" | ssh -- "$host" "$remote_command"
+  else
+    ssh -t -- "$host" "$remote_command"
+  fi
   register_managed_host "$host"
   echo "Registered managed SSH host: $host"
 }
@@ -160,7 +176,8 @@ if [[ "$discover_ssh" == true ]]; then
   exit 0
 fi
 if [[ -n "$ssh_host" ]]; then
-  install_remote_host "$ssh_host"
+  load_local_deepseek_key
+  install_remote_host "$ssh_host" "$deepseek_key"
   exit 0
 fi
 if [[ "$update_remotes_only" == true ]]; then
@@ -182,9 +199,7 @@ install_dir="${install_dir%/}"
   echo "Install path cannot be the filesystem root." >&2
   exit 1
 }
-if [[ -z "$deepseek_key" ]]; then
-  deepseek_key="$(security find-generic-password -a "$USER" -s codex-deepseek-api-key -w 2>/dev/null || true)"
-fi
+load_local_deepseek_key
 if [[ -z "$deepseek_key" ]]; then
   read -r -s -p "DeepSeek API Key: " deepseek_key </dev/tty
   echo
@@ -257,6 +272,8 @@ if ! grep -Eq '^[[:space:]]*\[model_providers\.deepseek\][[:space:]]*(#.*)?$' "$
   printf '%s\n' 'wire_api = "responses"' >> "$config_path"
   printf '%s\n' 'supports_websockets = false' >> "$config_path"
 fi
+
+"$current_dir/bin/codex" features enable multi_agent_v2
 
 keychain_service="codex-deepseek-api-key"
 security add-generic-password -U -a "$USER" -s "$keychain_service" -w "$deepseek_key" -T /usr/bin/security >/dev/null

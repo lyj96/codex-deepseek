@@ -9511,6 +9511,46 @@ async fn model_catalog_json_loads_from_path() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn external_provider_loads_its_managed_model_catalog() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let catalog_dir = codex_home.path().join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir)?;
+    let mut catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    catalog.models = catalog.models.into_iter().take(1).collect();
+    catalog.models[0].slug = "deepseek-flash".to_string();
+    std::fs::write(
+        catalog_dir.join("deepseek.json"),
+        serde_json::to_string(&catalog).expect("serialize catalog"),
+    )?;
+
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+model = "deepseek-flash"
+model_provider = "deepseek"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/"
+env_key = "DEEPSEEK_API_KEY"
+wire_api = "responses"
+"#,
+    )
+    .expect("external provider config should parse");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.model_provider_id, "deepseek");
+    assert_eq!(config.model_catalog, Some(catalog));
+    Ok(())
+}
+
+#[tokio::test]
 async fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let catalog_path = codex_home.path().join("catalog.json");

@@ -4149,7 +4149,7 @@ impl Config {
         )
         .map_err(std::io::Error::from)?;
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
-        let config = Self {
+        let mut config = Self {
             model,
             service_tier,
             review_model,
@@ -4404,6 +4404,16 @@ impl Config {
                 .unwrap_or_default(),
             otel,
         };
+        if config.model_catalog.is_none()
+            && config.model_provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID
+        {
+            let provider_id = config.model_provider_id.clone();
+            crate::agent::external_model_route::apply_external_provider_catalog(
+                &mut config,
+                &provider_id,
+            )
+            .map_err(|message| std::io::Error::new(ErrorKind::InvalidData, message))?;
+        }
         Ok(config)
         })
         .await
