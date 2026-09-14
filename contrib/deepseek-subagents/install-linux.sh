@@ -131,15 +131,14 @@ profile_path="$HOME/.profile"
 touch "$profile_path"
 if ! grep -Fq '# BEGIN CODEX DEEPSEEK' "$profile_path"; then
   [[ ! -s "$profile_path" ]] || cp "$profile_path" "$profile_path.bak.$(date +%Y%m%d%H%M%S)"
-  escaped_wrapper="${wrapper//\'/\'\"\'\"\'}"
   {
     printf '\n%s\n' '# BEGIN CODEX DEEPSEEK'
-    printf "export CODEX_CLI_PATH='%s'\n" "$escaped_wrapper"
+    printf '%s\n' 'export CODEX_CLI_PATH="$HOME/.local/bin/codex-deepseek"'
     printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"'
     printf '%s\n' '# END CODEX DEEPSEEK'
   } >> "$profile_path"
 fi
-export CODEX_CLI_PATH="$wrapper"
+export CODEX_CLI_PATH="$bin_dir/codex-deepseek"
 export DEEPSEEK_API_KEY="$deepseek_key"
 
 echo "Installed Codex DeepSeek to: $current_dir"

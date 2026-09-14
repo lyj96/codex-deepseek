@@ -127,24 +127,28 @@ supports_websockets = false
     }
 
     $codexPath = Join-Path $currentDir "bin\codex.exe"
-    $launcherPath = Join-Path $resolvedInstallDir "codex-deepseek.cmd"
+    $launcherDir = Join-Path $env:LOCALAPPDATA "CodexDeepSeekLauncher"
+    $launcherPath = Join-Path $launcherDir "codex-deepseek.cmd"
+    New-Item -ItemType Directory -Path $launcherDir -Force | Out-Null
     [IO.File]::WriteAllText(
         $launcherPath,
-        "@echo off`r`n`"%~dp0current\bin\codex.exe`" %*`r`n",
+        "@echo off`r`n`"%CODEX_DEEPSEEK_INSTALL_DIR%\current\bin\codex.exe`" %*`r`n",
         [Text.Encoding]::ASCII
     )
     [Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", $DeepSeekKey, "User")
     [Environment]::SetEnvironmentVariable("CODEX_CLI_PATH", $codexPath, "User")
+    [Environment]::SetEnvironmentVariable("CODEX_DEEPSEEK_INSTALL_DIR", $resolvedInstallDir, "User")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $pathEntries = @($userPath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if (-not ($pathEntries | Where-Object { $_.TrimEnd('\') -ieq $resolvedInstallDir.TrimEnd('\') })) {
-        $newUserPath = (@($pathEntries) + $resolvedInstallDir) -join ';'
+    if (-not ($pathEntries | Where-Object { $_.TrimEnd('\') -ieq $launcherDir.TrimEnd('\') })) {
+        $newUserPath = (@($pathEntries) + $launcherDir) -join ';'
         [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
     }
     $env:DEEPSEEK_API_KEY = $DeepSeekKey
     $env:CODEX_CLI_PATH = $codexPath
-    if (-not (($env:Path -split ';') | Where-Object { $_.TrimEnd('\') -ieq $resolvedInstallDir.TrimEnd('\') })) {
-        $env:Path = "$resolvedInstallDir;$env:Path"
+    $env:CODEX_DEEPSEEK_INSTALL_DIR = $resolvedInstallDir
+    if (-not (($env:Path -split ';') | Where-Object { $_.TrimEnd('\') -ieq $launcherDir.TrimEnd('\') })) {
+        $env:Path = "$launcherDir;$env:Path"
     }
 
     Write-Host "Installed Codex DeepSeek to: $currentDir"
