@@ -2,6 +2,11 @@ name: deepseek-release
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish npm packages from an existing DeepSeek Release without rebuilding"
+        required: false
+        type: string
   push:
     tags:
       - "codex-v*.*.*-deepseek.*"
@@ -28,6 +33,8 @@ jobs:
       package: ${{ steps.version.outputs.package }}
       npm: ${{ steps.version.outputs.npm }}
       publish: ${{ steps.version.outputs.publish }}
+      npm_only: ${{ steps.version.outputs.npm_only }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -35,35 +42,48 @@ jobs:
       - id: version
         name: Resolve release version
         shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           workspace_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' codex-rs/Cargo.toml | head -n1)"
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+          npm_only=false
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            tag="$REQUESTED_TAG"
+            npm_only=true
+            publish=true
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
+            publish=true
+          else
+            tag=""
+            base="$workspace_version"
+            revision=1
+            publish=false
+          fi
+          if [[ -n "$tag" ]]; then
             if [[ ! "$tag" =~ ^codex-v([0-9]+\.[0-9]+\.[0-9]+)-deepseek\.([1-9][0-9]*)$ ]]; then
               echo "Invalid release tag: $tag" >&2
               exit 1
             fi
             base="${BASH_REMATCH[1]}"
             revision="${BASH_REMATCH[2]}"
-            if [[ "$base" != "$workspace_version" ]]; then
+            if [[ "$npm_only" != true && "$base" != "$workspace_version" ]]; then
               echo "Tag base $base does not match Cargo workspace version $workspace_version" >&2
               exit 1
             fi
-            publish=true
-          else
-            base="$workspace_version"
-            revision=1
-            publish=false
           fi
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "package=$base+deepseek.$revision" >> "$GITHUB_OUTPUT"
           echo "npm=$base-deepseek.$revision" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "npm_only=$npm_only" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
+    if: needs.version.outputs.npm_only != 'true'
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
@@ -215,7 +235,11 @@ jobs:
     needs:
       - version
       - build
-    if: needs.version.outputs.publish == 'true'
+    if: >-
+      ${{
+        needs.version.outputs.publish == 'true' &&
+        needs.version.outputs.npm_only != 'true'
+      }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -262,13 +286,15 @@ jobs:
   publish-npm:
     needs:
       - version
-      - build
       - release
     if: >-
       ${{
-        !cancelled() &&
+        always() &&
         needs.version.outputs.publish == 'true' &&
-        needs.release.result == 'success' &&
+        (
+          needs.release.result == 'success' ||
+          (needs.version.outputs.npm_only == 'true' && needs.release.result == 'skipped')
+        ) &&
         vars.NPM_PUBLISH_ENABLED == 'true'
       }}
     runs-on: ubuntu-24.04
@@ -276,26 +302,32 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-        with:
-          persist-credentials: false
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: codex-deepseek-*
-          path: dist
-          merge-multiple: true
-      - name: Build root npm package
+          package-manager-cache: false
+      - name: Download npm packages from GitHub Release
         env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
           NPM_VERSION: ${{ needs.version.outputs.npm }}
         run: |
-          python contrib/deepseek-subagents/npm/build_npm_package.py \
-            --package root \
-            --version "$NPM_VERSION" \
-            --pack-output "dist/codex-dp-$NPM_VERSION.tgz"
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "codex-dp-$NPM_VERSION*.tgz" \
+            --dir dist
+          expected=(
+            "dist/codex-dp-$NPM_VERSION-linux-x64.tgz"
+            "dist/codex-dp-$NPM_VERSION-darwin-arm64.tgz"
+            "dist/codex-dp-$NPM_VERSION-win32-x64.tgz"
+            "dist/codex-dp-$NPM_VERSION.tgz"
+          )
+          for tarball in "${expected[@]}"; do
+            test -f "$tarball" || { echo "Missing npm tarball: $tarball" >&2; exit 1; }
+          done
       - name: Publish npm packages serially
         env:
           NPM_VERSION: ${{ needs.version.outputs.npm }}
