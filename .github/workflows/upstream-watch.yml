@@ -1,0 +1,123 @@
+name: upstream-watch
+
+on:
+  schedule:
+    # 09:17 Asia/Shanghai. The odd minute reduces load at the top of the hour.
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FORK_REPO: ${{ github.repository }}
+      UPSTREAM_REPO: openai/codex
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          ref: deepseek
+
+      - id: version
+        name: Check latest stable upstream release
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest_tag="$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name)"
+          if [[ ! "$latest_tag" =~ ^rust-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Latest upstream release is not a stable Rust release: $latest_tag" >&2
+            exit 1
+          fi
+          latest_version="${BASH_REMATCH[1]}"
+          current_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' codex-rs/Cargo.toml | head -n1)"
+          [[ -n "$current_version" ]] || {
+            echo "Could not determine the current workspace version." >&2
+            exit 1
+          }
+
+          update=false
+          if [[ "$latest_version" != "$current_version" ]]; then
+            newest="$(printf '%s\n' "$current_version" "$latest_version" | sort -V | tail -n1)"
+            if [[ "$newest" == "$latest_version" ]]; then
+              update=true
+            else
+              echo "Fork version $current_version is newer than upstream stable $latest_version; skipping."
+            fi
+          fi
+
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "latest_version=$latest_version" >> "$GITHUB_OUTPUT"
+          echo "current_version=$current_version" >> "$GITHUB_OUTPUT"
+          echo "update=$update" >> "$GITHUB_OUTPUT"
+          echo "Current=$current_version Latest=$latest_version Update=$update"
+
+      - if: steps.version.outputs.update == 'true'
+        name: Create upstream synchronization pull request
+        shell: bash
+        env:
+          LATEST_TAG: ${{ steps.version.outputs.latest_tag }}
+          LATEST_VERSION: ${{ steps.version.outputs.latest_version }}
+          CURRENT_VERSION: ${{ steps.version.outputs.current_version }}
+        run: |
+          set -euo pipefail
+          branch="sync/$LATEST_TAG"
+          existing_pr="$(gh pr list --repo "$FORK_REPO" --state open --head "$branch" --json url --jq '.[0].url // empty')"
+          if [[ -n "$existing_pr" ]]; then
+            echo "Synchronization PR already exists: $existing_pr"
+            exit 0
+          fi
+
+          git remote add upstream https://github.com/openai/codex.git
+          git fetch --no-tags upstream "refs/tags/$LATEST_TAG:refs/tags/$LATEST_TAG"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git switch -C "$branch" origin/deepseek
+
+          if ! git merge --no-ff --no-edit "$LATEST_TAG"; then
+            conflicts="$(git diff --name-only --diff-filter=U | sed '/^$/d')"
+            git merge --abort
+            title="[upstream-sync] $LATEST_TAG requires conflict resolution"
+            body="$(printf 'Upstream %s is newer than the fork base %s, but the automatic merge found conflicts.\n\nConflicting files:\n\n```\n%s\n```\n\nThe daily Codex maintenance task should resolve these conflicts, preserve the DeepSeek integration, run the focused test suite, and only then publish a release.' "$LATEST_TAG" "$CURRENT_VERSION" "$conflicts")"
+            issue="$(gh issue list --repo "$FORK_REPO" --state open --search "\"$title\" in:title" --json url --jq '.[0].url // empty')"
+            if [[ -n "$issue" ]]; then
+              gh issue comment "$issue" --repo "$FORK_REPO" --body "$body"
+              echo "Updated conflict issue: $issue"
+            else
+              issue="$(gh issue create --repo "$FORK_REPO" --title "$title" --body "$body")"
+              echo "Created conflict issue: $issue"
+            fi
+            exit 0
+          fi
+
+          merged_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' codex-rs/Cargo.toml | head -n1)"
+          if [[ "$merged_version" != "$LATEST_VERSION" ]]; then
+            echo "Merged workspace version $merged_version does not match $LATEST_VERSION." >&2
+            exit 1
+          fi
+
+          git push --force-with-lease origin "$branch"
+          pr_body="$(printf 'Synchronizes the fork with the OpenAI Codex stable release [%s](https://github.com/openai/codex/releases/tag/%s).\n\nThe daily Codex maintenance task must verify the DeepSeek provider route, plaintext external-agent schemas, installers, and all three release targets before merging and releasing.' "$LATEST_TAG" "$LATEST_TAG")"
+          pr_url="$(gh pr create \
+            --repo "$FORK_REPO" \
+            --base deepseek \
+            --head "$branch" \
+            --title "Sync OpenAI Codex $LATEST_TAG" \
+            --body "$pr_body"
+          )"
+          echo "Created synchronization PR: $pr_url"
+
+          # Pull requests created by GITHUB_TOKEN do not emit another workflow event.
+          # Dispatch the focused CI workflow explicitly for this branch.
+          gh workflow run deepseek-ci.yml --repo "$FORK_REPO" --ref "$branch"
