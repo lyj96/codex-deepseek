@@ -1,12 +1,18 @@
 # Mixed OpenAI + DeepSeek subagents for Codex Desktop
 
-This fork keeps the desktop task on its normal OpenAI model while allowing an
-explicit personal subagent role to use DeepSeek's official Responses API.
+This fork keeps the desktop task on its normal OpenAI model while allowing a
+subagent model whose name starts with `deepseek` to use DeepSeek's official
+Responses API.
 
 ## What the patch changes
 
 - A role file under `~/.codex/agents/` may select `model_provider` and a
   role-local `model_catalog_json`.
+- `spawn_external_agent` routes a requested model to the longest matching
+  configured external-provider prefix. For example, `deepseek-flash` selects
+  the `deepseek` provider without requiring an `agent_type` argument. The
+  personal role remains an internal source of provider settings and catalog
+  metadata.
 - Repository-defined agent roles cannot change provider or catalog. This keeps
   an untrusted repository from silently sending code to a third party.
 - Cross-provider messages use ordinary plaintext Responses API user messages.
@@ -31,7 +37,9 @@ CARGO_PROFILE_RELEASE_LTO=false \
   CARGO_PROFILE_RELEASE_DEBUG=none \
   CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
   RUSTFLAGS='-C link-arg=-Wl,--no-keep-memory' \
-  cargo build -p codex-cli --release --target x86_64-pc-windows-gnu
+  cargo build -p codex-cli --release --target x86_64-pc-windows-gnu --bin codex
+x86_64-w64-mingw32-strip \
+  target/x86_64-pc-windows-gnu/release/codex.exe
 ```
 
 On Ubuntu/WSL, the linker is provided by the `gcc-mingw-w64-x86-64`
@@ -48,12 +56,15 @@ catalog. It copies the custom CLI to `%LOCALAPPDATA%\CodexDeepSeek\current`,
 sets the user-level `CODEX_CLI_PATH`, and backs up the existing Codex config.
 
 Fully quit and reopen Codex Desktop. Keep the main task on an OpenAI model, then
-ask it to use the `deepseek_worker` subagent for a self-contained task.
+ask it to use a `deepseek`-prefixed model for a self-contained subagent task.
 
 Example:
 
-> Use the deepseek_worker subagent to inspect this repository for duplicated
-> retry logic. Return findings only; do not edit files.
+> Use a subagent with model deepseek-flash to inspect this repository for
+> duplicated retry logic. Return findings only; do not edit files.
+
+The explicit `deepseek_worker` role remains supported for compatibility, but
+normal prompts do not need to mention it.
 
 To roll back the most recent installation:
 

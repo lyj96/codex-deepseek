@@ -15,6 +15,7 @@ use crate::session::turn_context::TurnContext;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
@@ -45,6 +46,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
@@ -191,6 +193,61 @@ model_reasoning_effort = "minimal"
         role_name.clone(),
         AgentRoleConfig {
             description: Some("Personal external provider worker".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    role_name
+}
+
+async fn install_personal_deepseek_role_with_catalog(turn: &mut TurnContext) -> String {
+    let role_name = "deepseek-worker".to_string();
+    let role_dir = turn.config.codex_home.as_path().join("agents");
+    tokio::fs::create_dir_all(&role_dir)
+        .await
+        .expect("personal agent directory should be created");
+
+    let mut flash_model = turn.model_info().as_ref().clone();
+    flash_model.slug = "deepseek-flash".to_string();
+    flash_model.display_name = "DeepSeek Flash".to_string();
+    flash_model.description = Some("Fast external coding model".to_string());
+    let mut pro_model = flash_model.clone();
+    pro_model.slug = "deepseek-v4-pro".to_string();
+    pro_model.display_name = "DeepSeek V4 Pro".to_string();
+    let catalog_path = role_dir.join("deepseek-models.json");
+    tokio::fs::write(
+        &catalog_path,
+        serde_json::to_vec_pretty(&ModelsResponse {
+            models: vec![flash_model, pro_model],
+        })
+        .expect("external model catalog should serialize"),
+    )
+    .await
+    .expect("external model catalog should be written");
+
+    let role_config_path = role_dir.join("deepseek-worker.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"model = "deepseek-v4-pro"
+model_provider = "deepseek"
+model_catalog_json = "deepseek-models.json"
+model_reasoning_effort = "high"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let mut config = (*turn.config).clone();
+    config.model_providers.insert(
+        "deepseek".to_string(),
+        built_in_model_providers(/* openai_base_url */ None)["ollama"].clone(),
+    );
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Personal DeepSeek provider worker".to_string()),
             config_file: Some(role_config_path),
             nickname_candidates: None,
         },
@@ -921,6 +978,67 @@ async fn multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
             .content
             .ends_with("Payload:\ninspect this repo")
     );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without_agent_type() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_personal_deepseek_role_with_catalog(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "deepseek_flash",
+                "model": "deepseek-flash",
+                "fork_turns": "none"
+            })),
+        ))
+        .await
+        .expect("provider-prefixed model should route without an explicit agent type");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn result should be json");
+    assert_eq!(result["task_name"], "/root/deepseek_flash");
+
+    let (agent_id, communication) = manager
+        .captured_ops()
+        .into_iter()
+        .find_map(|(thread_id, op)| match op {
+            Op::InterAgentCommunication { communication, .. }
+                if communication.recipient.as_str() == "/root/deepseek_flash" =>
+            {
+                Some((thread_id, communication))
+            }
+            _ => None,
+        })
+        .expect("spawned external agent should receive a task");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned external agent should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "deepseek-flash");
+    assert_eq!(snapshot.model_provider_id, "deepseek");
+    assert_eq!(snapshot.session_source.get_agent_role(), Some(role_name));
+    assert!(communication.encrypted_content.is_none());
 }
 
 #[tokio::test]

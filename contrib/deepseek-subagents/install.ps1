@@ -53,11 +53,12 @@ if ($configExisted) {
 )
 
 $previousCliPath = [Environment]::GetEnvironmentVariable('CODEX_CLI_PATH', 'User')
+$targetCodex = Join-Path $installDir 'codex.exe'
 $state = [ordered]@{
     InstalledAt = (Get-Date).ToString('o')
     BackupDirectory = $backupDir
     PreviousCodexCliPath = $previousCliPath
-    CustomCodexPath = (Join-Path $installDir 'codex.exe')
+    CustomCodexPath = $targetCodex
 }
 [System.IO.File]::WriteAllText(
     (Join-Path $backupDir 'install-state.json'),
@@ -127,8 +128,20 @@ $endMarker
 $updatedConfig = $configWithoutManagedBlock.TrimEnd() + "`r`n`r`n" + $managedBlock.Trim() + "`r`n"
 [System.IO.File]::WriteAllText($configPath, $updatedConfig, $utf8NoBom)
 
-$targetCodex = Join-Path $installDir 'codex.exe'
-Copy-Item -LiteralPath $resolvedCodexExe -Destination $targetCodex -Force
+try {
+    Copy-Item -LiteralPath $resolvedCodexExe -Destination $targetCodex -Force
+} catch {
+    $lockedTargetCodex = $targetCodex
+    $targetCodex = Join-Path $installDir "codex-$timestamp.exe"
+    Copy-Item -LiteralPath $resolvedCodexExe -Destination $targetCodex -Force
+    $state.CustomCodexPath = $targetCodex
+    [System.IO.File]::WriteAllText(
+        (Join-Path $backupDir 'install-state.json'),
+        ($state | ConvertTo-Json -Depth 3) + "`n",
+        $utf8NoBom
+    )
+    Write-Warning "Could not replace $lockedTargetCodex because it is in use. Installed side by side as $targetCodex."
+}
 
 $package = Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1
 if ($null -eq $package) {
@@ -155,7 +168,8 @@ if (-not $SkipDesktopOverride) {
 
 Write-Host "Installed custom Codex: $targetCodex"
 Write-Host "Custom CLI version: $versionOutput"
-Write-Host "DeepSeek role: deepseek_worker"
+Write-Host "DeepSeek model routing: deepseek* -> deepseek provider"
+Write-Host "Compatibility role: deepseek_worker"
 Write-Host "Backup: $backupDir"
 if ($SkipDesktopOverride) {
     Write-Host 'Desktop override was skipped.'

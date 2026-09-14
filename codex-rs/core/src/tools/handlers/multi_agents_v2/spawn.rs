@@ -1,6 +1,8 @@
 use super::*;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
+use crate::agent::external_model_route::ExternalModelRoute;
+use crate::agent::external_model_route::apply_provider_prefix_route;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent_communication::AgentCommunicationContext;
@@ -8,6 +10,7 @@ use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::session::multi_agents::resolve_usage_hints;
 use crate::tools::handlers::multi_agents::collab_tool_call_status;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
@@ -107,6 +110,7 @@ async fn handle_spawn_agent(
         payload,
         call_id,
         source,
+        tool_name,
         ..
     } = invocation;
     let turn = &step_context.turn;
@@ -126,20 +130,55 @@ async fn handle_spawn_agent(
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
     let requested_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
-    apply_requested_spawn_agent_model_overrides(
-        &session,
-        turn.as_ref(),
-        &mut config,
-        args.model.as_deref(),
-        args.reasoning_effort.clone(),
-    )
-    .await?;
-    if !requested_full_history_fork || role_name.is_some() {
-        apply_spawn_agent_role(&session, &mut config, role_name).await?;
-        if requested_full_history_fork && config.developer_instructions.is_none() {
-            config
-                .developer_instructions
-                .clone_from(&turn.developer_instructions);
+    let is_external_spawn = tool_name.name == SPAWN_EXTERNAL_AGENT_TOOL_NAME;
+    let mut routed_role_name = None;
+    if is_external_spawn && args.model.is_some() {
+        if let Some(role_name) = role_name {
+            apply_spawn_agent_role(&session, &mut config, Some(role_name)).await?;
+            routed_role_name = Some(role_name.to_string());
+        } else {
+            match apply_provider_prefix_route(
+                &mut config,
+                args.model.as_deref().unwrap_or_default(),
+            )
+            .await
+            .map_err(FunctionCallError::RespondToModel)?
+            {
+                ExternalModelRoute::Applied { role_name } => routed_role_name = role_name,
+                ExternalModelRoute::NotMatched => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "External model names must begin with a configured external provider id, such as `deepseek-`."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        apply_requested_spawn_agent_model_overrides(
+            &session,
+            turn.as_ref(),
+            &mut config,
+            args.model.as_deref(),
+            args.reasoning_effort.clone(),
+            SpawnAgentModelSelection::EffectiveExternalProvider,
+        )
+        .await?;
+    } else {
+        apply_requested_spawn_agent_model_overrides(
+            &session,
+            turn.as_ref(),
+            &mut config,
+            args.model.as_deref(),
+            args.reasoning_effort.clone(),
+            SpawnAgentModelSelection::SessionCatalog,
+        )
+        .await?;
+        if !requested_full_history_fork || role_name.is_some() {
+            apply_spawn_agent_role(&session, &mut config, role_name).await?;
+            if requested_full_history_fork && config.developer_instructions.is_none() {
+                config
+                    .developer_instructions
+                    .clone_from(&turn.developer_instructions);
+            }
         }
     }
     let crosses_model_providers = config.model_provider_id != turn.config.model_provider_id;
@@ -159,7 +198,8 @@ async fn handle_spawn_agent(
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
 
     // Remember an applied configured default so cold reload reapplies its restrictions.
-    let persisted_role_name = role_name.or_else(|| {
+    let effective_role_name = routed_role_name.as_deref().or(role_name);
+    let persisted_role_name = effective_role_name.or_else(|| {
         (!is_full_history_fork
             && config
                 .agent_roles
@@ -265,7 +305,7 @@ async fn handle_spawn_agent(
         },
     )
     .await;
-    let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    let role_tag = effective_role_name.unwrap_or(DEFAULT_ROLE_NAME);
     turn.session_telemetry.counter(
         "codex.multi_agent.spawn",
         /*inc*/ 1,

@@ -1351,11 +1351,16 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 .values()
                 .any(|role| role.config_file.is_some())
             {
+                let mut external_spawn_options = spawn_options;
+                external_spawn_options.available_models =
+                    crate::agent::external_model_route::configured_model_presets(
+                        &turn_context.config,
+                    );
                 registry.register_trusted_with_exposure(
                     plaintext_external_agent_handler(
-                        SpawnAgentHandlerV2::new(spawn_options),
+                        SpawnAgentHandlerV2::new(external_spawn_options),
                         SPAWN_EXTERNAL_AGENT_TOOL_NAME,
-                        "Spawn an agent role that uses an external model provider. Set `agent_type` to the configured external role and `fork_turns` to `none`.",
+                        "Spawn an agent using a configured external model provider. Set `model` to a name beginning with its provider id, such as `deepseek-flash`; `agent_type` is optional. Set `fork_turns` to `none`.",
                     ),
                     exposure,
                 );

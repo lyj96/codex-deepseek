@@ -100,6 +100,7 @@ async fn handle_spawn_agent(
         &mut config,
         args.model.as_deref(),
         args.reasoning_effort.clone(),
+        SpawnAgentModelSelection::SessionCatalog,
     )
     .await?;
     if !args.fork_context {

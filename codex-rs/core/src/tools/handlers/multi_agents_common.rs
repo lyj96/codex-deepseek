@@ -1,3 +1,4 @@
+use crate::agent::external_model_route::model_matches_effective_external_provider;
 use crate::agent::role::apply_role_to_config;
 use crate::config::Config;
 use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
@@ -31,6 +32,12 @@ pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIME
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 pub(crate) const MAX_SPAWN_AGENT_MODEL_OVERRIDES: usize = 5;
+
+#[derive(Clone, Copy)]
+pub(crate) enum SpawnAgentModelSelection {
+    SessionCatalog,
+    EffectiveExternalProvider,
+}
 
 pub(crate) fn model_supports_multi_agent_backend(
     model: &ModelPreset,
@@ -270,6 +277,7 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     config: &mut Config,
     requested_model: Option<&str>,
     requested_reasoning_effort: Option<ReasoningEffort>,
+    selection: SpawnAgentModelSelection,
 ) -> Result<(), FunctionCallError> {
     let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
     let requested_reasoning_effort = requested_reasoning_effort
@@ -279,16 +287,33 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     }
 
     if let Some(requested_model) = requested_model {
-        let available_models = session
-            .services
-            .models_manager
-            .list_models(RefreshStrategy::Offline, config.http_client_factory())
-            .await;
+        let available_models = match selection {
+            SpawnAgentModelSelection::SessionCatalog => {
+                session
+                    .services
+                    .models_manager
+                    .list_models(RefreshStrategy::Offline, config.http_client_factory())
+                    .await
+            }
+            SpawnAgentModelSelection::EffectiveExternalProvider => config
+                .model_catalog
+                .as_ref()
+                .map(|catalog| catalog.models.clone().into_iter().map(Into::into).collect())
+                .unwrap_or_default(),
+        };
         let selected_model_name = find_spawn_agent_model_name(
             &available_models,
             requested_model,
             turn.multi_agent_version,
-        )?;
+        )
+        .or_else(|err| {
+            (matches!(
+                selection,
+                SpawnAgentModelSelection::EffectiveExternalProvider
+            ) && model_matches_effective_external_provider(config, requested_model))
+            .then(|| requested_model.to_string())
+            .ok_or(err)
+        })?;
         let selected_model_info = session
             .services
             .models_manager
