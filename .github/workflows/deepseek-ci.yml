@@ -61,10 +61,12 @@ jobs:
           }
           $originalUserProfile = $env:USERPROFILE
           $originalAppData = $env:APPDATA
+          $originalLocalAppData = $env:LOCALAPPDATA
           try {
             $smokeHome = Join-Path $env:RUNNER_TEMP "installer-smoke-windows"
             $env:USERPROFILE = $smokeHome
             $env:APPDATA = Join-Path $smokeHome "AppData"
+            $env:LOCALAPPDATA = Join-Path $smokeHome "LocalAppData"
             New-Item -ItemType Directory -Path (Join-Path $smokeHome ".ssh"), (Join-Path $env:APPDATA "CodexDeepSeek") -Force | Out-Null
             [IO.File]::WriteAllLines(
               (Join-Path $smokeHome ".ssh/config"),
@@ -81,6 +83,7 @@ jobs:
           } finally {
             $env:USERPROFILE = $originalUserProfile
             $env:APPDATA = $originalAppData
+            $env:LOCALAPPDATA = $originalLocalAppData
           }
       - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
