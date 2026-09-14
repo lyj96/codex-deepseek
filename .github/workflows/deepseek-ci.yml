@@ -122,6 +122,26 @@ jobs:
             $env:PATH = $originalPath
             Remove-Item Env:EXPECTED_DEEPSEEK_KEY -ErrorAction SilentlyContinue
           }
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+      - name: Validate codex-dp npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest contrib/deepseek-subagents/npm/test_build_npm_package.py
+          npm_dist="$RUNNER_TEMP/codex-dp-npm"
+          mkdir -p "$npm_dist"
+          python contrib/deepseek-subagents/npm/build_npm_package.py \
+            --package root \
+            --version 0.154.0-deepseek.1 \
+            --pack-output "$npm_dist/codex-dp.tgz"
+          tar -xOf "$npm_dist/codex-dp.tgz" package/package.json \
+            | node -e 'let s=""; process.stdin.on("data", d => s += d).on("end", () => { const p=JSON.parse(s); if (p.name !== "codex-dp" || p.bin["codex-dp"] !== "bin/codex-dp.js") process.exit(1); })'
+          stage="$RUNNER_TEMP/codex-dp-root"
+          mkdir -p "$stage"
+          tar -xzf "$npm_dist/codex-dp.tgz" -C "$stage" --strip-components=1
+          node "$stage/bin/codex-dp.js" setup --help
       - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:

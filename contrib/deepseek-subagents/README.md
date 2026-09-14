@@ -4,6 +4,22 @@
 `spawn_external_agent` 拉起 `deepseek-flash`、`deepseek-v4-pro` 等 DeepSeek 子 Agent。
 不需要配置或指定 `deepseek_worker`。
 
+## npm 安装
+
+已安装 Node.js 18+ 时，三平台都可以使用同一条命令：
+
+```bash
+npm install -g codex-dp
+codex-dp setup
+```
+
+`codex-dp setup` 会配置 DeepSeek、启用 `multi_agent_v2`，并提示输入 API Key。
+安装后使用 `codex-dp` 启动 CLI。需要同步 SSH 远程服务器时：
+
+```bash
+codex-dp setup --ssh-host devbox
+```
+
 ## 一键安装
 
 安装器会下载最新版、校验 SHA-256、配置 DeepSeek provider、启用 `multi_agent_v2`，
@@ -126,11 +142,11 @@ curl -fsSL https://github.com/lyj96/codex-deepseek/releases/latest/download/inst
 
 ## 支持的平台
 
-| 系统 | Release 包 |
-| --- | --- |
-| Windows x64 | `codex-deepseek-package-x86_64-pc-windows-msvc.zip` |
-| Apple Silicon macOS | `codex-deepseek-package-aarch64-apple-darwin.tar.gz` |
-| Linux x64 | `codex-deepseek-package-x86_64-unknown-linux-musl.tar.gz` |
+| 系统                | Release 包                                                |
+| ------------------- | --------------------------------------------------------- |
+| Windows x64         | `codex-deepseek-package-x86_64-pc-windows-msvc.zip`       |
+| Apple Silicon macOS | `codex-deepseek-package-aarch64-apple-darwin.tar.gz`      |
+| Linux x64           | `codex-deepseek-package-x86_64-unknown-linux-musl.tar.gz` |
 
 发布包没有商业代码签名。macOS 首次运行若被 Gatekeeper 拦截，请先核对 Release 中的
 `SHA256SUMS`，再到“系统设置 → 隐私与安全性”允许运行。

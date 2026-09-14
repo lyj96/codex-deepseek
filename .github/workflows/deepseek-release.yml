@@ -26,6 +26,7 @@ jobs:
       base: ${{ steps.version.outputs.base }}
       revision: ${{ steps.version.outputs.revision }}
       package: ${{ steps.version.outputs.package }}
+      npm: ${{ steps.version.outputs.npm }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -58,6 +59,7 @@ jobs:
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "package=$base+deepseek.$revision" >> "$GITHUB_OUTPUT"
+          echo "npm=$base-deepseek.$revision" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
   build:
@@ -85,6 +87,9 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:
           toolchain: 1.95.0
@@ -180,10 +185,30 @@ jobs:
           PACKAGE_VERSION: ${{ needs.version.outputs.package }}
           PACKAGE_DIR: dist/package-${{ matrix.target }}
           STABLE_GIT_COMMIT: ${{ github.sha }}
+      - name: Build platform npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            x86_64-unknown-linux-musl) npm_platform=linux-x64 ;;
+            aarch64-apple-darwin) npm_platform=darwin-arm64 ;;
+            x86_64-pc-windows-msvc) npm_platform=win32-x64 ;;
+            *) echo "Unsupported npm target: $TARGET" >&2; exit 1 ;;
+          esac
+          python contrib/deepseek-subagents/npm/build_npm_package.py \
+            --package "$npm_platform" \
+            --version "$NPM_VERSION" \
+            --vendor-src "dist/package-$TARGET" \
+            --pack-output "dist/codex-dp-$NPM_VERSION-$npm_platform.tgz"
+        env:
+          TARGET: ${{ matrix.target }}
+          NPM_VERSION: ${{ needs.version.outputs.npm }}
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: codex-deepseek-${{ matrix.target }}
-          path: dist/codex-deepseek-package-*
+          path: |
+            dist/codex-deepseek-package-*
+            dist/codex-dp-*.tgz
           if-no-files-found: error
 
   release:
@@ -198,6 +223,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: codex-deepseek-*
@@ -205,7 +233,13 @@ jobs:
           merge-multiple: true
       - name: Add configuration and checksums
         shell: bash
+        env:
+          NPM_VERSION: ${{ needs.version.outputs.npm }}
         run: |
+          python contrib/deepseek-subagents/npm/build_npm_package.py \
+            --package root \
+            --version "$NPM_VERSION" \
+            --pack-output "dist/codex-dp-$NPM_VERSION.tgz"
           cp contrib/deepseek-subagents/deepseek-models.json dist/
           cp contrib/deepseek-subagents/install-windows.ps1 dist/
           cp contrib/deepseek-subagents/install-macos.sh dist/
@@ -224,3 +258,69 @@ jobs:
             --verify-tag \
             --title "Codex $BASE_VERSION + DeepSeek r$REVISION" \
             --notes "基于 OpenAI Codex $BASE_VERSION，增加 DeepSeek 子 Agent 模型路由。下载对应平台的 package，并按 QUICKSTART.zh-CN.md 配置。发布包未使用商业代码签名。"
+
+  publish-npm:
+    needs:
+      - version
+      - build
+      - release
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.version.outputs.publish == 'true' &&
+        needs.release.result == 'success' &&
+        vars.NPM_PUBLISH_ENABLED == 'true'
+      }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: codex-deepseek-*
+          path: dist
+          merge-multiple: true
+      - name: Build root npm package
+        env:
+          NPM_VERSION: ${{ needs.version.outputs.npm }}
+        run: |
+          python contrib/deepseek-subagents/npm/build_npm_package.py \
+            --package root \
+            --version "$NPM_VERSION" \
+            --pack-output "dist/codex-dp-$NPM_VERSION.tgz"
+      - name: Publish npm packages serially
+        env:
+          NPM_VERSION: ${{ needs.version.outputs.npm }}
+        run: |
+          set -euo pipefail
+          publish_tarball() {
+            local tarball="$1"
+            local tag="$2"
+            local output status
+            set +e
+            output="$(npm publish "$tarball" --access public --tag "$tag" 2>&1)"
+            status=$?
+            set -e
+            echo "$output"
+            if [[ $status -ne 0 ]] && ! grep -qiE "previously published|cannot publish over|version already exists" <<<"$output"; then
+              return "$status"
+            fi
+          }
+
+          platforms=(linux-x64 darwin-arm64 win32-x64)
+          for platform in "${platforms[@]}"; do
+            publish_tarball \
+              "dist/codex-dp-$NPM_VERSION-$platform.tgz" \
+              "$platform"
+          done
+          publish_tarball \
+            "dist/codex-dp-$NPM_VERSION.tgz" \
+            latest
