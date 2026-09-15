@@ -1,5 +1,4 @@
 import importlib.util
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,45 +13,28 @@ SPEC.loader.exec_module(BUILD)
 
 
 class BuildNpmPackageTest(unittest.TestCase):
-    def test_root_package_points_to_all_supported_platform_versions(self) -> None:
+    def test_root_package_is_a_thin_installer(self) -> None:
         package = BUILD.root_package_json("0.154.0-deepseek.2")
 
         self.assertEqual(package["name"], "codex-dp")
         self.assertEqual(package["bin"], {"codex-dp": "bin/codex-dp.js"})
-        self.assertEqual(
-            package["optionalDependencies"],
-            {
-                "codex-dp-linux-x64": "npm:codex-dp@0.154.0-deepseek.2-linux-x64",
-                "codex-dp-darwin-arm64": "npm:codex-dp@0.154.0-deepseek.2-darwin-arm64",
-                "codex-dp-win32-x64": "npm:codex-dp@0.154.0-deepseek.2-win32-x64",
-            },
-        )
+        self.assertNotIn("optionalDependencies", package)
 
-    def test_platform_staging_places_full_package_under_target(self) -> None:
+    def test_root_package_accepts_an_npm_only_hotfix_version(self) -> None:
+        package = BUILD.root_package_json("0.154.0-deepseek.2-npm.1")
+
+        self.assertEqual(package["version"], "0.154.0-deepseek.2-npm.1")
+
+    def test_thin_package_staging_contains_only_javascript_launcher(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             temp_path = Path(temp)
-            vendor_src = temp_path / "source"
-            (vendor_src / "bin").mkdir(parents=True)
-            (vendor_src / "bin" / "codex").write_text("binary", encoding="utf-8")
-            (vendor_src / "codex-package.json").write_text(
-                '{"version":"0.154.0+deepseek.2"}\n', encoding="utf-8"
-            )
             staging = temp_path / "staging"
             staging.mkdir()
 
-            BUILD.stage_package(
-                staging,
-                "0.154.0-deepseek.2",
-                "linux-x64",
-                vendor_src,
-            )
+            BUILD.stage_package(staging, "0.154.0-deepseek.2")
 
-            target = "x86_64-unknown-linux-musl"
-            self.assertTrue((staging / "vendor" / target / "bin" / "codex").is_file())
-            package = json.loads((staging / "package.json").read_text())
-            self.assertEqual(package["version"], "0.154.0-deepseek.2-linux-x64")
-            self.assertEqual(package["os"], ["linux"])
-            self.assertEqual(package["cpu"], ["x64"])
+            self.assertTrue((staging / "bin" / "codex-dp.js").is_file())
+            self.assertFalse((staging / "vendor").exists())
 
 
 if __name__ == "__main__":

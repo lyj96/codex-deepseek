@@ -15,16 +15,15 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const packageJson = JSON.parse(
-  readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
-);
 
 const repo = "lyj96/codex-deepseek";
 const supportedRedirectHost = (hostname) =>
   hostname === "github.com" || hostname.endsWith(".githubusercontent.com");
 
-function releaseTagForVersion(version) {
-  const match = /^(\d+\.\d+\.\d+)-deepseek\.([1-9]\d*)$/.exec(version);
+export function releaseTagForVersion(version) {
+  const match = /^(\d+\.\d+\.\d+)-deepseek\.([1-9]\d*)(?:-npm\.[1-9]\d*)?$/.exec(
+    version,
+  );
   if (!match) {
     throw new Error(`Unsupported codex-dp package version: ${version}`);
   }
@@ -180,6 +179,9 @@ export async function runSetup(args) {
     throw new Error(`Unsupported setup platform: ${process.platform}`);
   }
 
+  const packageJson = JSON.parse(
+    readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
+  );
   const releaseTag = releaseTagForVersion(packageJson.version);
   const releaseBase = `https://github.com/${repo}/releases/download/${releaseTag}`;
   const tempDirectory = mkdtempSync(path.join(os.tmpdir(), "codex-dp-setup-"));

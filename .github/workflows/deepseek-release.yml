@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Publish npm packages from an existing DeepSeek Release without rebuilding"
+        description: "Publish the npm installer for an existing DeepSeek Release without rebuilding"
+        required: false
+        type: string
+      npm_package_version:
+        description: "Optional npm-only hotfix version (for example X.Y.Z-deepseek.N-npm.M)"
         required: false
         type: string
   push:
@@ -44,6 +48,7 @@ jobs:
         shell: bash
         env:
           REQUESTED_TAG: ${{ inputs.release_tag }}
+          REQUESTED_NPM_VERSION: ${{ inputs.npm_package_version }}
         run: |
           set -euo pipefail
           workspace_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' codex-rs/Cargo.toml | head -n1)"
@@ -73,10 +78,26 @@ jobs:
               exit 1
             fi
           fi
+          npm_version="$base-deepseek.$revision"
+          if [[ -n "$REQUESTED_NPM_VERSION" ]]; then
+            if [[ "$npm_only" != true ]]; then
+              echo "npm_package_version is only valid with release_tag." >&2
+              exit 1
+            fi
+            if [[ ! "$REQUESTED_NPM_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-deepseek\.([1-9][0-9]*)-npm\.([1-9][0-9]*)$ ]]; then
+              echo "Invalid npm-only hotfix version: $REQUESTED_NPM_VERSION" >&2
+              exit 1
+            fi
+            if [[ "${BASH_REMATCH[1]}" != "$base" || "${BASH_REMATCH[2]}" != "$revision" ]]; then
+              echo "npm hotfix $REQUESTED_NPM_VERSION does not match release $tag." >&2
+              exit 1
+            fi
+            npm_version="$REQUESTED_NPM_VERSION"
+          fi
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "package=$base+deepseek.$revision" >> "$GITHUB_OUTPUT"
-          echo "npm=$base-deepseek.$revision" >> "$GITHUB_OUTPUT"
+          echo "npm=$npm_version" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "npm_only=$npm_only" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -205,30 +226,10 @@ jobs:
           PACKAGE_VERSION: ${{ needs.version.outputs.package }}
           PACKAGE_DIR: dist/package-${{ matrix.target }}
           STABLE_GIT_COMMIT: ${{ github.sha }}
-      - name: Build platform npm package
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$TARGET" in
-            x86_64-unknown-linux-musl) npm_platform=linux-x64 ;;
-            aarch64-apple-darwin) npm_platform=darwin-arm64 ;;
-            x86_64-pc-windows-msvc) npm_platform=win32-x64 ;;
-            *) echo "Unsupported npm target: $TARGET" >&2; exit 1 ;;
-          esac
-          python contrib/deepseek-subagents/npm/build_npm_package.py \
-            --package "$npm_platform" \
-            --version "$NPM_VERSION" \
-            --vendor-src "dist/package-$TARGET" \
-            --pack-output "dist/codex-dp-$NPM_VERSION-$npm_platform.tgz"
-        env:
-          TARGET: ${{ matrix.target }}
-          NPM_VERSION: ${{ needs.version.outputs.npm }}
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: codex-deepseek-${{ matrix.target }}
-          path: |
-            dist/codex-deepseek-package-*
-            dist/codex-dp-*.tgz
+          path: dist/codex-deepseek-package-*
           if-no-files-found: error
 
   release:
@@ -261,7 +262,6 @@ jobs:
           NPM_VERSION: ${{ needs.version.outputs.npm }}
         run: |
           python contrib/deepseek-subagents/npm/build_npm_package.py \
-            --package root \
             --version "$NPM_VERSION" \
             --pack-output "dist/codex-dp-$NPM_VERSION.tgz"
           cp contrib/deepseek-subagents/deepseek-models.json dist/
@@ -302,6 +302,12 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 24
@@ -309,52 +315,21 @@ jobs:
           package-manager-cache: false
       - name: Use OIDC-capable npm
         run: npm install --global npm@11.19.1
-      - name: Download npm packages from GitHub Release
+      - name: Build thin npm installer
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.version.outputs.tag }}
           NPM_VERSION: ${{ needs.version.outputs.npm }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          gh release download "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "codex-dp-$NPM_VERSION*.tgz" \
-            --dir dist
-          expected=(
-            "dist/codex-dp-$NPM_VERSION-linux-x64.tgz"
-            "dist/codex-dp-$NPM_VERSION-darwin-arm64.tgz"
-            "dist/codex-dp-$NPM_VERSION-win32-x64.tgz"
-            "dist/codex-dp-$NPM_VERSION.tgz"
-          )
-          for tarball in "${expected[@]}"; do
-            test -f "$tarball" || { echo "Missing npm tarball: $tarball" >&2; exit 1; }
-          done
-      - name: Publish npm packages serially
+          python contrib/deepseek-subagents/npm/build_npm_package.py \
+            --version "$NPM_VERSION" \
+            --pack-output "dist/codex-dp-$NPM_VERSION.tgz"
+      - name: Publish npm installer
         env:
           NPM_VERSION: ${{ needs.version.outputs.npm }}
         run: |
           set -euo pipefail
-          publish_tarball() {
-            local tarball="$1"
-            local tag="$2"
-            local output status
-            set +e
-            output="$(npm publish "$tarball" --access public --tag "$tag" 2>&1)"
-            status=$?
-            set -e
-            echo "$output"
-            if [[ $status -ne 0 ]] && ! grep -qiE "previously published|cannot publish over|version already exists" <<<"$output"; then
-              return "$status"
-            fi
-          }
-
-          platforms=(linux-x64 darwin-arm64 win32-x64)
-          for platform in "${platforms[@]}"; do
-            publish_tarball \
-              "./dist/codex-dp-$NPM_VERSION-$platform.tgz" \
-              "$platform"
-          done
-          publish_tarball \
+          npm publish \
             "./dist/codex-dp-$NPM_VERSION.tgz" \
-            latest
+            --access public \
+            --tag latest

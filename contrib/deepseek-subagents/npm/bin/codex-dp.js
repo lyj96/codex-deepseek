@@ -1,17 +1,11 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { runSetup } from "./setup.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const require = createRequire(import.meta.url);
-const packageRoot = realpathSync(path.join(__dirname, ".."));
 
 if (process.argv[2] === "setup") {
   await runSetup(process.argv.slice(3));
@@ -20,16 +14,36 @@ if (process.argv[2] === "setup") {
 
 const platformByRuntime = {
   "linux-x64": {
-    packageName: "codex-dp-linux-x64",
-    target: "x86_64-unknown-linux-musl",
+    defaultInstall: path.join(
+      os.homedir(),
+      ".local",
+      "share",
+      "codex-deepseek",
+      "current",
+      "bin",
+      "codex",
+    ),
   },
   "darwin-arm64": {
-    packageName: "codex-dp-darwin-arm64",
-    target: "aarch64-apple-darwin",
+    defaultInstall: path.join(
+      os.homedir(),
+      "Library",
+      "Application Support",
+      "CodexDeepSeek",
+      "current",
+      "bin",
+      "codex",
+    ),
   },
   "win32-x64": {
-    packageName: "codex-dp-win32-x64",
-    target: "x86_64-pc-windows-msvc",
+    defaultInstall: path.join(
+      process.env.LOCALAPPDATA ??
+        path.join(os.homedir(), "AppData", "Local"),
+      "CodexDeepSeek",
+      "current",
+      "bin",
+      "codex.exe",
+    ),
   },
 };
 
@@ -43,41 +57,35 @@ if (!platformPackage) {
 }
 
 function findCodexExecutable() {
-  let vendorRoot;
-  try {
-    const packageJsonPath = require.resolve(
-      `${platformPackage.packageName}/package.json`,
+  const candidates = [process.env.CODEX_CLI_PATH];
+  if (process.platform === "win32" && process.env.CODEX_DEEPSEEK_INSTALL_DIR) {
+    candidates.push(
+      path.join(
+        process.env.CODEX_DEEPSEEK_INSTALL_DIR,
+        "current",
+        "bin",
+        "codex.exe",
+      ),
     );
-    vendorRoot = path.join(path.dirname(packageJsonPath), "vendor");
-  } catch {
-    vendorRoot = path.join(packageRoot, "vendor");
+  } else if (process.platform !== "win32") {
+    candidates.push(path.join(os.homedir(), ".local", "bin", "codex-deepseek"));
   }
+  candidates.push(platformPackage.defaultInstall);
 
-  const binaryPath = path.join(
-    vendorRoot,
-    platformPackage.target,
-    "bin",
-    process.platform === "win32" ? "codex.exe" : "codex",
-  );
-  if (existsSync(binaryPath)) {
-    return binaryPath;
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) {
+      return candidate;
+    }
   }
 
   throw new Error(
-    `Missing optional dependency ${platformPackage.packageName}. ` +
-      "Reinstall with: npm install -g codex-dp@latest",
+    "Codex DeepSeek is not installed. Run `codex-dp setup` first.",
   );
 }
 
-const env = {
-  ...process.env,
-  CODEX_MANAGED_BY_NPM: "1",
-  CODEX_MANAGED_PACKAGE_ROOT: packageRoot,
-};
-
 const child = spawn(findCodexExecutable(), process.argv.slice(2), {
   stdio: "inherit",
-  env,
+  env: process.env,
 });
 
 child.on("error", (error) => {

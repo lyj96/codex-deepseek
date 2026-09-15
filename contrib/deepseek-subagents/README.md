@@ -14,6 +14,8 @@ codex-dp setup
 ```
 
 `codex-dp setup` 会配置 DeepSeek、启用 `multi_agent_v2`，并提示输入 API Key。
+npm 包本身是小型安装器；三平台二进制仍从对应 GitHub Release 下载并校验
+SHA-256，不会在 npm 中重复存储大包。
 安装后使用 `codex-dp` 启动 CLI。需要同步 SSH 远程服务器时：
 
 ```bash

@@ -130,18 +130,23 @@ jobs:
         run: |
           set -euo pipefail
           python -m unittest contrib/deepseek-subagents/npm/test_build_npm_package.py
+          node --test contrib/deepseek-subagents/npm/bin/setup.test.mjs
           npm_dist="$RUNNER_TEMP/codex-dp-npm"
           mkdir -p "$npm_dist"
           python contrib/deepseek-subagents/npm/build_npm_package.py \
-            --package root \
             --version 0.154.0-deepseek.1 \
             --pack-output "$npm_dist/codex-dp.tgz"
           tar -xOf "$npm_dist/codex-dp.tgz" package/package.json \
-            | node -e 'let s=""; process.stdin.on("data", d => s += d).on("end", () => { const p=JSON.parse(s); if (p.name !== "codex-dp" || p.bin["codex-dp"] !== "bin/codex-dp.js") process.exit(1); })'
+            | node -e 'let s=""; process.stdin.on("data", d => s += d).on("end", () => { const p=JSON.parse(s); if (p.name !== "codex-dp" || p.bin["codex-dp"] !== "bin/codex-dp.js" || p.optionalDependencies) process.exit(1); })'
           stage="$RUNNER_TEMP/codex-dp-root"
           mkdir -p "$stage"
           tar -xzf "$npm_dist/codex-dp.tgz" -C "$stage" --strip-components=1
           node "$stage/bin/codex-dp.js" setup --help
+          fake_codex="$RUNNER_TEMP/codex-deepseek-fake"
+          printf '%s\n' '#!/bin/sh' 'printf "fake-codex %s\\n" "$*"' > "$fake_codex"
+          chmod +x "$fake_codex"
+          CODEX_CLI_PATH="$fake_codex" node "$stage/bin/codex-dp.js" --version \
+            | grep -Fx 'fake-codex --version'
       - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the codex-dp root or platform-specific npm tarball."""
+"""Build the thin codex-dp npm installer tarball."""
 
 import argparse
 import json
@@ -14,50 +14,17 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
 NPM_NAME = "codex-dp"
-VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+-deepseek\.[1-9]\d*$")
-
-PLATFORMS = {
-    "linux-x64": {
-        "alias": "codex-dp-linux-x64",
-        "target": "x86_64-unknown-linux-musl",
-        "os": "linux",
-        "cpu": "x64",
-    },
-    "darwin-arm64": {
-        "alias": "codex-dp-darwin-arm64",
-        "target": "aarch64-apple-darwin",
-        "os": "darwin",
-        "cpu": "arm64",
-    },
-    "win32-x64": {
-        "alias": "codex-dp-win32-x64",
-        "target": "x86_64-pc-windows-msvc",
-        "os": "win32",
-        "cpu": "x64",
-    },
-}
+VERSION_PATTERN = re.compile(
+    r"^\d+\.\d+\.\d+-deepseek\.[1-9]\d*(?:-npm\.[1-9]\d*)?$"
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--package",
-        choices=("root", *PLATFORMS),
-        default="root",
-    )
     parser.add_argument("--version", required=True)
-    parser.add_argument(
-        "--vendor-src",
-        type=Path,
-        help="Extracted codex package directory for a platform package.",
-    )
     parser.add_argument("--staging-dir", type=Path)
     parser.add_argument("--pack-output", type=Path, required=True)
     return parser.parse_args()
-
-
-def package_version(version: str, package: str) -> str:
-    return version if package == "root" else f"{version}-{package}"
 
 
 def root_package_json(version: str) -> dict:
@@ -71,7 +38,7 @@ def root_package_json(version: str) -> dict:
         "type": "module",
         "bin": {"codex-dp": "bin/codex-dp.js"},
         "engines": {"node": ">=18"},
-        "files": ["bin", "README.md", "LICENSE"],
+        "files": ["bin/codex-dp.js", "bin/setup.js", "README.md", "LICENSE"],
         "repository": {
             "type": "git",
             "url": "git+https://github.com/lyj96/codex-deepseek.git",
@@ -80,29 +47,6 @@ def root_package_json(version: str) -> dict:
         "homepage": "https://github.com/lyj96/codex-deepseek",
         "bugs": "https://github.com/lyj96/codex-deepseek/issues",
         "keywords": ["codex", "deepseek", "agent", "cli"],
-        "optionalDependencies": {
-            config["alias"]: f"npm:{NPM_NAME}@{version}-{platform}"
-            for platform, config in PLATFORMS.items()
-        },
-    }
-
-
-def platform_package_json(version: str, platform: str) -> dict:
-    config = PLATFORMS[platform]
-    return {
-        "name": NPM_NAME,
-        "version": package_version(version, platform),
-        "description": f"Native payload for codex-dp ({platform}).",
-        "license": "Apache-2.0",
-        "os": [config["os"]],
-        "cpu": [config["cpu"]],
-        "engines": {"node": ">=18"},
-        "files": ["vendor", "README.md", "LICENSE"],
-        "repository": {
-            "type": "git",
-            "url": "git+https://github.com/lyj96/codex-deepseek.git",
-            "directory": "contrib/deepseek-subagents/npm",
-        },
     }
 
 
@@ -124,24 +68,13 @@ def copy_common_files(staging_dir: Path) -> None:
 def stage_package(
     staging_dir: Path,
     version: str,
-    package: str,
-    vendor_src: Path | None,
 ) -> None:
     copy_common_files(staging_dir)
-    if package == "root":
-        shutil.copytree(SCRIPT_DIR / "bin", staging_dir / "bin")
-        package_json = root_package_json(version)
-    else:
-        if vendor_src is None:
-            raise RuntimeError(f"--vendor-src is required for {package}")
-        vendor_src = vendor_src.resolve()
-        target = PLATFORMS[package]["target"]
-        binary_name = "codex.exe" if package == "win32-x64" else "codex"
-        binary_path = vendor_src / "bin" / binary_name
-        if not binary_path.is_file():
-            raise RuntimeError(f"Expected native binary not found: {binary_path}")
-        shutil.copytree(vendor_src, staging_dir / "vendor" / target)
-        package_json = platform_package_json(version, package)
+    bin_dir = staging_dir / "bin"
+    bin_dir.mkdir()
+    for filename in ("codex-dp.js", "setup.js"):
+        shutil.copy2(SCRIPT_DIR / "bin" / filename, bin_dir / filename)
+    package_json = root_package_json(version)
 
     with (staging_dir / "package.json").open("w", encoding="utf-8") as output:
         json.dump(package_json, output, indent=2)
@@ -179,15 +112,13 @@ def main() -> int:
     args = parse_args()
     if not VERSION_PATTERN.fullmatch(args.version):
         raise RuntimeError(
-            "--version must use the form X.Y.Z-deepseek.N, with N starting at 1."
+            "--version must use X.Y.Z-deepseek.N or "
+            "X.Y.Z-deepseek.N-npm.M, with N and M starting at 1."
         )
     staging_dir = prepare_staging_dir(args.staging_dir)
-    stage_package(staging_dir, args.version, args.package, args.vendor_src)
+    stage_package(staging_dir, args.version)
     npm_pack(staging_dir, args.pack_output)
-    print(
-        f"Built {NPM_NAME}@{package_version(args.version, args.package)} "
-        f"at {args.pack_output.resolve()}"
-    )
+    print(f"Built {NPM_NAME}@{args.version} at {args.pack_output.resolve()}")
     return 0
 
 
