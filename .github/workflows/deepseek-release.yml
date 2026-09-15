@@ -307,6 +307,8 @@ jobs:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
+      - name: Use OIDC-capable npm
+        run: npm install --global npm@11.19.1
       - name: Download npm packages from GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -350,9 +352,9 @@ jobs:
           platforms=(linux-x64 darwin-arm64 win32-x64)
           for platform in "${platforms[@]}"; do
             publish_tarball \
-              "dist/codex-dp-$NPM_VERSION-$platform.tgz" \
+              "./dist/codex-dp-$NPM_VERSION-$platform.tgz" \
               "$platform"
           done
           publish_tarball \
-            "dist/codex-dp-$NPM_VERSION.tgz" \
+            "./dist/codex-dp-$NPM_VERSION.tgz" \
             latest
