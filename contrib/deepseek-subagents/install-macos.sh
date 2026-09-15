@@ -277,7 +277,7 @@ fi
 
 keychain_service="codex-deepseek-api-key"
 security add-generic-password -U -a "$USER" -s "$keychain_service" -w "$deepseek_key" -T /usr/bin/security >/dev/null
-wrapper="$install_dir/codex-deepseek"
+wrapper="$install_dir/codex-dp"
 {
   printf '%s\n' '#!/bin/sh'
   printf '%s\n' 'DEEPSEEK_API_KEY="$(/usr/bin/security find-generic-password -a "$USER" -s codex-deepseek-api-key -w)"'
@@ -288,7 +288,16 @@ chmod 700 "$wrapper"
 
 bin_dir="$HOME/.local/bin"
 mkdir -p "$bin_dir"
-ln -sfn "$wrapper" "$bin_dir/codex-deepseek"
+primary_launcher="$bin_dir/codex-dp"
+legacy_launcher="$bin_dir/codex-deepseek"
+if [[ ! -e "$primary_launcher" && ! -L "$primary_launcher" ]] ||
+   [[ -L "$primary_launcher" && ("$(readlink "$primary_launcher")" == "$wrapper" || "$(readlink "$primary_launcher")" == "$install_dir/codex-deepseek") ]]; then
+  ln -sfn "$wrapper" "$primary_launcher"
+else
+  echo "Keeping existing codex-dp launcher: $primary_launcher"
+fi
+# Compatibility for installations made before the CLI name was unified.
+ln -sfn "$wrapper" "$legacy_launcher"
 profile_path="$HOME/.zprofile"
 touch "$profile_path"
 if ! grep -Fq '# BEGIN CODEX DEEPSEEK' "$profile_path"; then
@@ -319,7 +328,7 @@ launchctl bootout "gui/$(id -u)" "$launch_agent" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$launch_agent"
 
 echo "Installed Codex DeepSeek to: $current_dir"
-echo "CLI command: $bin_dir/codex-deepseek"
+echo "CLI command: codex-dp"
 [[ -z "$backup_dir" ]] || echo "Previous installation kept at: $backup_dir"
 echo "Fully quit and reopen Codex Desktop before using DeepSeek subagents."
 offer_remote_updates "$package_version"

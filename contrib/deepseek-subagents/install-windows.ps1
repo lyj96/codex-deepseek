@@ -356,11 +356,19 @@ supports_websockets = false
 
     $codexPath = Join-Path $currentDir "bin\codex.exe"
     $launcherDir = Join-Path $env:LOCALAPPDATA "CodexDeepSeekLauncher"
-    $launcherPath = Join-Path $launcherDir "codex-deepseek.cmd"
+    $launcherPath = Join-Path $launcherDir "codex-dp.cmd"
+    $legacyLauncherPath = Join-Path $launcherDir "codex-deepseek.cmd"
+    $launcherContent = "@echo off`r`n`"%CODEX_DEEPSEEK_INSTALL_DIR%\current\bin\codex.exe`" %*`r`n"
     New-Item -ItemType Directory -Path $launcherDir -Force | Out-Null
     [IO.File]::WriteAllText(
         $launcherPath,
-        "@echo off`r`n`"%CODEX_DEEPSEEK_INSTALL_DIR%\current\bin\codex.exe`" %*`r`n",
+        $launcherContent,
+        [Text.Encoding]::ASCII
+    )
+    # Compatibility for installations made before the CLI name was unified.
+    [IO.File]::WriteAllText(
+        $legacyLauncherPath,
+        $launcherContent,
         [Text.Encoding]::ASCII
     )
     [Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", $DeepSeekKey, "User")
@@ -386,7 +394,7 @@ supports_websockets = false
 
     Write-Host "Installed Codex DeepSeek to: $currentDir"
     Write-Host "CODEX_CLI_PATH: $codexPath"
-    Write-Host "CLI command: codex-deepseek"
+    Write-Host "CLI command: codex-dp"
     if ($backupDir) {
         Write-Host "Previous installation kept at: $backupDir"
     }

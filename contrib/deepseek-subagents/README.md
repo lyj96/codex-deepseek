@@ -4,25 +4,28 @@
 `spawn_external_agent` 拉起 `deepseek-flash`、`deepseek-v4-pro` 等 DeepSeek 子 Agent。
 不需要配置或指定 `deepseek_worker`。
 
-## npm 安装
+## 选择安装方式
 
-已安装 Node.js 18+ 时，三平台都可以使用同一条命令：
+- **只使用 CLI：推荐 npm。** 安装、更新最简单，执行 `npm install -g codex-dp@latest` 即可。
+- **使用 Codex Desktop 或 SSH 远程项目：推荐一键安装脚本。** 脚本会设置桌面端需要的
+  `CODEX_CLI_PATH`，并可发现、登记和更新远程服务器。
+
+两种方式安装后的 CLI 命令都统一为 `codex-dp`。
+
+## 纯 CLI：npm 安装（推荐）
+
+已安装 Node.js 18+ 时，三平台都可以使用：
 
 ```bash
 npm install -g codex-dp
 codex-dp setup
+codex-dp
 ```
 
 `codex-dp setup` 会配置 DeepSeek、启用 `multi_agent_v2`，并提示输入 API Key。
 npm 包本身是小型安装器；三平台二进制仍从对应 GitHub Release 下载并校验
 SHA-256，不会在 npm 中重复存储大包。
-安装后使用 `codex-dp` 启动 CLI。需要同步 SSH 远程服务器时：
-
-```bash
-codex-dp setup --ssh-host devbox
-```
-
-## 一键安装
+## Desktop / SSH：一键安装脚本（推荐）
 
 安装器会下载最新版、校验 SHA-256、配置 DeepSeek provider、启用 `multi_agent_v2`，
 并提示输入 API Key。
@@ -62,11 +65,13 @@ curl -fsSL https://github.com/lyj96/codex-deepseek/releases/latest/download/inst
 
 直接在命令行传 Key 会进入 Shell 历史；个人电脑建议省略 `DeepSeekKey` / `--deepseek-key`，使用安装器的隐藏输入。
 
-安装完成后完全退出并重新打开 Codex Desktop。CLI 命令为：
+安装完成后完全退出并重新打开 Codex Desktop。三个系统的 CLI 命令统一为：
 
 ```text
-codex-deepseek
+codex-dp
 ```
+
+旧版命令 `codex-deepseek` 暂时保留为兼容别名，新文档和脚本输出统一使用 `codex-dp`。
 
 ## SSH 远程项目
 

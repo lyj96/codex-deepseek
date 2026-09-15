@@ -7,6 +7,8 @@ It keeps the main agent on OpenAI models and adds DeepSeek models such as
 
 ## Install
 
+For CLI-only use, npm is the recommended installation method:
+
 ```bash
 npm install -g codex-dp
 codex-dp setup
@@ -19,14 +21,16 @@ checks its SHA-256 digest, configures the DeepSeek provider and API key, enables
 The npm package itself is intentionally small and does not duplicate the native
 archives already hosted in GitHub Releases.
 
+For Codex Desktop or SSH remote projects, the platform one-click installer in
+the [Chinese quick start](https://github.com/lyj96/codex-deepseek/tree/deepseek/contrib/deepseek-subagents)
+is recommended because it configures `CODEX_CLI_PATH` and remote launchers.
+
 ```bash
 codex-dp setup --ssh-host devbox
 codex-dp setup --update-remotes --yes
 ```
 
 Supported platforms: Windows x64, Apple Silicon macOS, and Linux x64.
-See the repository's
-[Chinese quick start](https://github.com/lyj96/codex-deepseek/tree/deepseek/contrib/deepseek-subagents)
-for complete setup and security notes.
+See the Chinese quick start for complete setup and security notes.
 
 This is a community fork and is not an official OpenAI package.

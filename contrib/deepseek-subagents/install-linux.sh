@@ -324,7 +324,7 @@ escaped_key="${deepseek_key//\'/\'\"\'\"\'}"
 printf "DEEPSEEK_API_KEY='%s'\n" "$escaped_key" > "$secret_file"
 chmod 600 "$secret_file"
 
-wrapper="$install_dir/codex-deepseek"
+wrapper="$install_dir/codex-dp"
 {
   printf '%s\n' '#!/bin/sh'
   printf 'if [ -r %q ]; then . %q; fi\n' "$secret_file" "$secret_file"
@@ -335,7 +335,16 @@ chmod 700 "$wrapper"
 
 bin_dir="$HOME/.local/bin"
 mkdir -p "$bin_dir"
-ln -sfn "$wrapper" "$bin_dir/codex-deepseek"
+primary_launcher="$bin_dir/codex-dp"
+legacy_launcher="$bin_dir/codex-deepseek"
+if [[ ! -e "$primary_launcher" && ! -L "$primary_launcher" ]] ||
+   [[ -L "$primary_launcher" && ("$(readlink "$primary_launcher")" == "$wrapper" || "$(readlink "$primary_launcher")" == "$install_dir/codex-deepseek") ]]; then
+  ln -sfn "$wrapper" "$primary_launcher"
+else
+  echo "Keeping existing codex-dp launcher: $primary_launcher"
+fi
+# Compatibility for installations made before the CLI name was unified.
+ln -sfn "$wrapper" "$legacy_launcher"
 if [[ "$ssh_remote" == true ]]; then
   ssh_launcher="$bin_dir/codex"
   wrapper_file="$state_dir/ssh-wrapper-path"
@@ -367,22 +376,22 @@ if ! grep -Fq '# BEGIN CODEX DEEPSEEK' "$profile_path"; then
   [[ ! -s "$profile_path" ]] || cp "$profile_path" "$profile_path.bak.$(date +%Y%m%d%H%M%S)"
   {
     printf '\n%s\n' '# BEGIN CODEX DEEPSEEK'
-    printf '%s\n' 'export CODEX_CLI_PATH="$HOME/.local/bin/codex-deepseek"'
+    printf 'export CODEX_CLI_PATH=%q\n' "$wrapper"
     printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"'
     printf '%s\n' '# END CODEX DEEPSEEK'
   } >> "$profile_path"
 fi
-export CODEX_CLI_PATH="$bin_dir/codex-deepseek"
+export CODEX_CLI_PATH="$wrapper"
 export DEEPSEEK_API_KEY="$deepseek_key"
 
 echo "Installed Codex DeepSeek to: $current_dir"
-echo "CLI command: $bin_dir/codex-deepseek"
+echo "CLI command: codex-dp"
 [[ "$ssh_remote" == false ]] || echo "Remote Codex command: $bin_dir/codex"
 [[ -z "$backup_dir" ]] || echo "Previous installation kept at: $backup_dir"
 if [[ "$ssh_remote" == true ]]; then
   PATH="$bin_dir:$PATH" codex --version
   echo "Reconnect this SSH host in Codex Desktop to use the updated app server."
 else
-  echo "Open a new shell before using codex-deepseek."
+  echo "Open a new shell before using codex-dp."
   offer_remote_updates "$package_version"
 fi
