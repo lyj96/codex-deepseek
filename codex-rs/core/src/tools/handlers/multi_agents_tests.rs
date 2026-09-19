@@ -241,6 +241,30 @@ async fn install_deepseek_provider_with_catalog(turn: &mut TurnContext) {
     turn.config = Arc::new(config);
 }
 
+async fn install_external_model_route(turn: &TurnContext, public_model: &str, api_model: &str) {
+    let routes_path = turn
+        .config
+        .codex_home
+        .as_path()
+        .join("model-catalogs")
+        .join("routes.json");
+    tokio::fs::write(
+        &routes_path,
+        serde_json::to_vec_pretty(&json!({
+            "version": 1,
+            "models": {
+                public_model: {
+                    "provider": "deepseek",
+                    "api_model": api_model
+                }
+            }
+        }))
+        .expect("external model routes should serialize"),
+    )
+    .await
+    .expect("external model routes should be written");
+}
+
 fn set_turn_config(turn: &mut TurnContext, config: crate::config::Config) {
     turn.multi_agent_version = config.multi_agent_version_from_features();
     turn.config = Arc::new(config);
@@ -1052,6 +1076,64 @@ async fn multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without
     assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
     assert_eq!(snapshot.session_source.get_agent_role(), None);
     assert!(communication.encrypted_content.is_none());
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_uses_explicit_model_route() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    install_external_model_route(&turn, "fast-code", "deepseek-flash").await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "fast_code",
+                "model": "fast-code",
+                "reasoning_effort": "high",
+                "fork_turns": "none"
+            })),
+        ))
+        .await
+        .expect("explicit model route should select its provider and API model");
+
+    let agent_id = manager
+        .captured_ops()
+        .into_iter()
+        .find_map(|(thread_id, op)| match op {
+            Op::InterAgentCommunication { communication, .. }
+                if communication.recipient.as_str() == "/root/fast_code" =>
+            {
+                Some(thread_id)
+            }
+            _ => None,
+        })
+        .expect("spawned external agent should receive a task");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned external agent should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "deepseek-flash");
+    assert_eq!(snapshot.model_provider_id, "deepseek");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
 }
 
 #[tokio::test]

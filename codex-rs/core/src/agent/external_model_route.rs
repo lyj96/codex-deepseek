@@ -1,35 +1,66 @@
 //! Resolves explicit sub-agent model names onto configured external providers.
 //!
-//! External routing is opt-in: a model slug must begin with a configured non-OpenAI provider id.
-//! Provider-specific model metadata lives under `~/.codex/model-catalogs/<provider>.json`, so an
-//! external provider does not need a synthetic agent role merely to select its catalog.
+//! External routing is opt-in. Explicit routes live in
+//! `~/.codex/model-catalogs/routes.json` and map a public model name to both a configured provider
+//! and the model name sent to that provider. Provider-prefixed model names remain supported for
+//! backwards compatibility.
 
 use crate::config::Config;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 const EXTERNAL_MODEL_CATALOGS_DIR: &str = "model-catalogs";
+const EXTERNAL_MODEL_ROUTES_FILE: &str = "routes.json";
+
+#[derive(Debug, Deserialize)]
+struct ExternalModelRoutes {
+    #[allow(dead_code)]
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    models: BTreeMap<String, ExternalModelRouteConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ExternalModelRouteConfig {
+    provider: String,
+    api_model: String,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ExternalModelRoute {
     NotMatched,
-    Applied { role_name: Option<String> },
+    Applied {
+        role_name: Option<String>,
+        model: String,
+    },
 }
 
-/// Routes a provider-prefixed model to that configured external provider.
-pub(crate) fn apply_provider_prefix_route(
+/// Routes a public model name to its configured external provider and API model name.
+pub(crate) fn apply_external_model_route(
     config: &mut Config,
     requested_model: &str,
 ) -> Result<ExternalModelRoute, String> {
-    let Some(provider_id) = matching_external_provider_id(config, requested_model) else {
+    let explicit_route = load_external_model_routes(config)?
+        .and_then(|routes| routes.models.get(requested_model).cloned());
+    let (provider_id, api_model) = if let Some(route) = explicit_route {
+        validate_explicit_route(config, requested_model, &route)?;
+        (route.provider, route.api_model)
+    } else if let Some(provider_id) = matching_external_provider_id(config, requested_model) {
+        (provider_id, requested_model.to_string())
+    } else {
         return Ok(ExternalModelRoute::NotMatched);
     };
 
     if config.model_provider_id == provider_id {
         apply_external_provider_catalog(config, &provider_id)?;
-        return Ok(ExternalModelRoute::Applied { role_name: None });
+        return Ok(ExternalModelRoute::Applied {
+            role_name: None,
+            model: api_model,
+        });
     }
 
     let provider = config
@@ -41,12 +72,37 @@ pub(crate) fn apply_provider_prefix_route(
     config.model_provider = provider;
     let provider_id = config.model_provider_id.clone();
     apply_external_provider_catalog(config, &provider_id)?;
-    Ok(ExternalModelRoute::Applied { role_name: None })
+    Ok(ExternalModelRoute::Applied {
+        role_name: None,
+        model: api_model,
+    })
 }
 
 /// Returns picker metadata from configured external-provider catalogs.
 pub(crate) fn configured_model_presets(config: &Config) -> Vec<ModelPreset> {
     let mut models = BTreeMap::new();
+
+    if let Ok(Some(routes)) = load_external_model_routes(config) {
+        for (public_model, route) in routes.models {
+            if validate_explicit_route(config, &public_model, &route).is_err() {
+                continue;
+            }
+            let Ok(Some(catalog)) = load_external_provider_catalog(config, &route.provider) else {
+                continue;
+            };
+            let Some(model) = catalog
+                .models
+                .into_iter()
+                .find(|model| model.slug == route.api_model)
+            else {
+                continue;
+            };
+            let mut preset: ModelPreset = model.into();
+            preset.id.clone_from(&public_model);
+            preset.model.clone_from(&public_model);
+            models.insert(public_model, preset);
+        }
+    }
 
     for provider_id in config
         .model_providers
@@ -68,6 +124,33 @@ pub(crate) fn configured_model_presets(config: &Config) -> Vec<ModelPreset> {
     }
 
     models.into_values().collect()
+}
+
+fn validate_explicit_route(
+    config: &Config,
+    public_model: &str,
+    route: &ExternalModelRouteConfig,
+) -> Result<(), String> {
+    if public_model.trim().is_empty() {
+        return Err("external model route names must not be empty".to_string());
+    }
+    if route.provider.trim().is_empty() || route.api_model.trim().is_empty() {
+        return Err(format!(
+            "external model route `{public_model}` must specify both `provider` and `api_model`"
+        ));
+    }
+    if route.provider == codex_model_provider_info::OPENAI_PROVIDER_ID {
+        return Err(format!(
+            "external model route `{public_model}` cannot target the built-in OpenAI provider"
+        ));
+    }
+    if !config.model_providers.contains_key(&route.provider) {
+        return Err(format!(
+            "external model route `{public_model}` references provider `{}` which is not configured",
+            route.provider
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn model_matches_effective_external_provider(
@@ -128,6 +211,32 @@ fn load_external_provider_catalog(
         ));
     }
     Ok(Some(catalog))
+}
+
+fn load_external_model_routes(config: &Config) -> Result<Option<ExternalModelRoutes>, String> {
+    let path = config
+        .codex_home
+        .as_path()
+        .join(EXTERNAL_MODEL_CATALOGS_DIR)
+        .join(EXTERNAL_MODEL_ROUTES_FILE);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "failed to read external model routes `{}`: {err}",
+                path.display()
+            ));
+        }
+    };
+    serde_json::from_str::<ExternalModelRoutes>(&contents)
+        .map(Some)
+        .map_err(|err| {
+            format!(
+                "failed to parse external model routes `{}` as JSON: {err}",
+                path.display()
+            )
+        })
 }
 
 fn external_provider_catalog_path(config: &Config, provider_id: &str) -> Option<PathBuf> {

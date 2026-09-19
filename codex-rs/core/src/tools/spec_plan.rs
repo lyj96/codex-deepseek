@@ -1354,7 +1354,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     plaintext_external_agent_handler(
                         SpawnAgentHandlerV2::new(external_spawn_options),
                         SPAWN_EXTERNAL_AGENT_TOOL_NAME,
-                        "Spawn an agent using a configured external model provider. Set `model` to a name beginning with its provider id, such as `deepseek-flash`; `agent_type` is optional. Set `fork_turns` to `none`.",
+                        "Spawn an agent using a configured external model provider. Set `model` to one of the configured external model ids; `agent_type` is optional. Set `fork_turns` to `none`.",
                     ),
                     exposure,
                 );

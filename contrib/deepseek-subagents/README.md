@@ -129,6 +129,9 @@ bash install-linux.sh --update-remotes
 
 无人值守时可加 `-Yes` / `--yes`。离线或未带有 Codex DeepSeek 管理标记的主机会被
 跳过，不会因为出现在 SSH 配置中就被修改；远程已是同一安装包版本时也不会重复安装。
+同步远程版本时也会通过 SSH 加密通道复制本机由 `codex-dp provider` 管理的 Provider、
+模型路由和密钥，并在远程重新应用。远程文件权限会设为 `0600`；这会让已登记服务器的
+受管配置与本机保持一致，但不会修改不在该清单中的手工 Provider 配置。
 
 需要恢复远程原有的 `codex` 入口时，在远程服务器执行：
 
@@ -146,6 +149,57 @@ curl -fsSL https://github.com/lyj96/codex-deepseek/releases/latest/download/inst
 `send_external_message` 和 `followup_external_task` 与同一个 DeepSeek 子 Agent 继续交互。
 
 发送给 DeepSeek 子 Agent 的任务内容和必要上下文会通过 DeepSeek API 处理。
+
+## 配置其他 Provider 和模型
+
+DeepSeek 是默认预设；安装后也可以添加任意兼容 OpenAI Responses API 的 Provider。
+直接运行交互式配置：
+
+```bash
+codex-dp provider add
+```
+
+也可以在运行一键安装脚本时加 `--configure-provider`；Windows 对应参数为
+`-ConfigureProvider`。安装器会先保留默认 DeepSeek 配置，再进入相同的交互流程。
+
+配置会依次询问 Provider 标识、名称、API 地址、密钥环境变量，并可连续添加多个模型。
+每个模型可以使用独立的公开名称和 Provider 真实模型名，例如公开名称 `company-fast`
+可以映射到 API 模型 `vendor/model-v3`，不再要求模型名以 Provider 名开头。
+
+常用管理命令：
+
+```bash
+codex-dp provider list
+codex-dp provider edit <provider-id> --base-url <url>
+codex-dp provider model add <provider-id> <公开模型名> --api-model <API模型名>
+codex-dp provider model edit <provider-id> <公开模型名> --reasoning-efforts low,high,max --default-reasoning-effort high
+codex-dp provider model remove <provider-id> <公开模型名>
+codex-dp provider remove <provider-id>
+codex-dp provider validate
+codex-dp provider test <provider-id>
+```
+
+`provider test` 检查本地清单、模型和密钥是否完整，不会发送或计费 API 请求；实际连通性
+可在保存配置并重启 Codex 后拉起一次该模型的子 Agent 验证。
+
+密钥单独保存在 `~/.codex/codex-dp/secrets.json`，不会写入 `config.toml`、Provider
+清单或命令输出。Linux/macOS 上该文件权限为 `0600`。推荐先把 Key 放入临时环境变量，
+再导入并立即清除临时变量：
+
+```bash
+codex-dp provider secret set COMPANY_API_KEY --from-env TEMP_COMPANY_KEY
+```
+
+也可以从标准输入导入：
+
+```bash
+printf '%s' "$TEMP_COMPANY_KEY" | codex-dp provider secret set COMPANY_API_KEY --stdin
+```
+
+Provider 清单位于 `~/.codex/codex-dp/providers.toml`；生成的模型目录和显式路由表位于
+`~/.codex/model-catalogs/`。程序升级会保留这些文件，执行 `codex-dp provider apply`
+即可重新生成 Codex 配置，并清理已经从受管清单中删除的 Provider 生成项。当前通用配置仅支持 Responses API；Chat Completions、Anthropic
+Messages 等协议需要单独适配器，不能只修改 URL 直接使用。
 
 ## 支持的平台
 

@@ -2,7 +2,7 @@ use super::*;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::external_model_route::ExternalModelRoute;
-use crate::agent::external_model_route::apply_provider_prefix_route;
+use crate::agent::external_model_route::apply_external_model_route;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent_communication::AgentCommunicationContext;
@@ -136,27 +136,28 @@ async fn handle_spawn_agent(
         if let Some(role_name) = role_name {
             apply_spawn_agent_role(&session, &mut config, Some(role_name)).await?;
             routed_role_name = Some(role_name.to_string());
-        } else {
-            match apply_provider_prefix_route(
-                &mut config,
-                args.model.as_deref().unwrap_or_default(),
-            )
-            .map_err(FunctionCallError::RespondToModel)?
-            {
-                ExternalModelRoute::Applied { role_name } => routed_role_name = role_name,
-                ExternalModelRoute::NotMatched => {
-                    return Err(FunctionCallError::RespondToModel(
-                        "External model names must begin with a configured external provider id, such as `deepseek-`."
-                            .to_string(),
-                    ));
-                }
-            }
         }
+        let requested_model = args.model.as_deref().unwrap_or_default();
+        let routed_model = match apply_external_model_route(&mut config, requested_model)
+            .map_err(FunctionCallError::RespondToModel)?
+        {
+            ExternalModelRoute::Applied { role_name, model } => {
+                routed_role_name = routed_role_name.or(role_name);
+                model
+            }
+            ExternalModelRoute::NotMatched if role_name.is_some() => requested_model.to_string(),
+            ExternalModelRoute::NotMatched => {
+                return Err(FunctionCallError::RespondToModel(
+                    "External model is not configured. Add an explicit model route or use a legacy provider-prefixed model name."
+                        .to_string(),
+                ));
+            }
+        };
         apply_requested_spawn_agent_model_overrides(
             &session,
             turn.as_ref(),
             &mut config,
-            args.model.as_deref(),
+            Some(&routed_model),
             args.reasoning_effort.clone(),
             SpawnAgentModelSelection::EffectiveExternalProvider,
         )
