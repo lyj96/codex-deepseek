@@ -13,6 +13,7 @@ update_remotes_only=false
 assume_yes=false
 ssh_remote=false
 restore_ssh=false
+configure_provider=false
 registry_dir="${XDG_CONFIG_HOME:-$HOME/.config}/codex-deepseek"
 managed_hosts_file="$registry_dir/ssh-hosts"
 state_dir="$HOME/.config/codex-deepseek"
@@ -23,7 +24,7 @@ usage() {
   cat <<'EOF'
 Usage: install-linux.sh [--install-dir PATH] [--deepseek-key KEY] [--release TAG]
                         [--ssh-host HOST | --discover-ssh | --update-remotes]
-                        [--yes]
+                        [--configure-provider] [--yes]
 
 Remote host options currently support Linux x86_64 SSH targets.
 --ssh-remote and --restore-ssh are intended to run on the remote host.
@@ -96,6 +97,18 @@ load_local_deepseek_key() {
   }
 }
 
+sync_managed_provider_files() {
+  local host="$1"
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local managed_dir="$codex_home/codex-dp"
+  local entries=(providers.toml)
+  [[ -r "$managed_dir/providers.toml" ]] || return 0
+  [[ ! -r "$managed_dir/secrets.json" ]] || entries+=(secrets.json)
+  echo "Syncing managed provider configuration to SSH host: $host"
+  tar -C "$managed_dir" -czf - "${entries[@]}" | ssh -- "$host" \
+    'set -eu; umask 077; mkdir -p "$HOME/.codex/codex-dp"; tar -xzf - -C "$HOME/.codex/codex-dp"; chmod 600 "$HOME/.codex/codex-dp/providers.toml"; test ! -f "$HOME/.codex/codex-dp/secrets.json" || chmod 600 "$HOME/.codex/codex-dp/secrets.json"; "$HOME/.local/bin/codex" provider apply'
+}
+
 install_remote_host() {
   local host="$1"
   local forward_key="${2:-}"
@@ -113,6 +126,7 @@ install_remote_host() {
   else
     ssh -t -- "$host" "$remote_command"
   fi
+  sync_managed_provider_files "$host"
   register_managed_host "$host"
   echo "Registered managed SSH host: $host"
 }
@@ -130,6 +144,7 @@ update_managed_remotes() {
     if remote_version="$(ssh -o BatchMode=yes -o ConnectTimeout=8 -- "$host" 'test -f "$HOME/.config/codex-deepseek/ssh-managed" && sed -n "s/^package_version=//p" "$HOME/.config/codex-deepseek/ssh-managed"' 2>/dev/null)"; then
       if [[ -n "$desired_version" && "$remote_version" == "$desired_version" ]]; then
         echo "Already current on SSH host: $host ($desired_version)"
+        sync_managed_provider_files "$host" || failed=true
         continue
       fi
       install_remote_host "$host" || failed=true
@@ -197,6 +212,7 @@ while [[ $# -gt 0 ]]; do
     --yes) assume_yes=true; shift ;;
     --ssh-remote) ssh_remote=true; shift ;;
     --restore-ssh) restore_ssh=true; shift ;;
+    --configure-provider) configure_provider=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -299,24 +315,13 @@ fi
 package_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$current_dir/codex-package.json" | head -n1)"
 [[ -n "$package_version" ]] || { echo "Installed package metadata does not contain a version." >&2; exit 1; }
 
-codex_home="${CODEX_HOME:-$HOME/.codex}"
-catalog_dir="$codex_home/model-catalogs"
-mkdir -p "$catalog_dir"
-cp "$temp_dir/$catalog_asset" "$catalog_dir/deepseek.json"
-
-config_path="$codex_home/config.toml"
-touch "$config_path"
-if ! grep -Eq '^[[:space:]]*\[model_providers\.deepseek\][[:space:]]*(#.*)?$' "$config_path"; then
-  [[ ! -s "$config_path" ]] || cp "$config_path" "$config_path.bak.$(date +%Y%m%d%H%M%S)"
-  printf '\n%s\n' '[model_providers.deepseek]' >> "$config_path"
-  printf '%s\n' 'name = "DeepSeek"' >> "$config_path"
-  printf '%s\n' 'base_url = "https://api.deepseek.com/"' >> "$config_path"
-  printf '%s\n' 'env_key = "DEEPSEEK_API_KEY"' >> "$config_path"
-  printf '%s\n' 'wire_api = "responses"' >> "$config_path"
-  printf '%s\n' 'supports_websockets = false' >> "$config_path"
-fi
-
+DEEPSEEK_API_KEY="$deepseek_key" "$current_dir/bin/codex" provider init-deepseek \
+  --store-key-from-env DEEPSEEK_API_KEY
 "$current_dir/bin/codex" features enable multi_agent_v2
+if [[ "$configure_provider" == true ]]; then
+  [[ -r /dev/tty ]] || { echo "--configure-provider requires an interactive terminal." >&2; exit 1; }
+  "$current_dir/bin/codex" provider add </dev/tty
+fi
 
 mkdir -p "$secret_dir"
 chmod 700 "$secret_dir"

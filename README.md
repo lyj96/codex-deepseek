@@ -1,10 +1,10 @@
 > [!IMPORTANT]
 > This is the community **Codex DeepSeek** fork. It keeps the main Codex agent
-> on OpenAI while allowing `deepseek*` subagent models through DeepSeek's API.
+> on OpenAI while allowing DeepSeek and other configured Responses-compatible models as subagents.
 > It is not an official OpenAI release.
 > Pure CLI users should install `codex-dp` from npm. Codex Desktop and SSH users
 > should use the platform one-click installer. See the
-> [中文快速开始](./contrib/deepseek-subagents/README.md).
+> [Chinese quick start](./contrib/deepseek-subagents/README.md).
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">

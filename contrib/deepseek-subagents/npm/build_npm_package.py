@@ -14,9 +14,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
 NPM_NAME = "codex-dp"
-VERSION_PATTERN = re.compile(
-    r"^\d+\.\d+\.\d+-deepseek\.[1-9]\d*(?:-npm\.[1-9]\d*)?$"
-)
+VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+-deepseek\.[1-9]\d*(?:-npm\.[1-9]\d*)?$")
 
 
 def parse_args() -> argparse.Namespace:

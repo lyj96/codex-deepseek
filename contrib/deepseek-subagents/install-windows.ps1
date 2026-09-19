@@ -6,6 +6,7 @@ param(
     [string]$SshHost,
     [switch]$DiscoverSsh,
     [switch]$UpdateRemotes,
+    [switch]$ConfigureProvider,
     [switch]$Yes
 )
 
@@ -65,6 +66,39 @@ function Register-ManagedHost {
     $managed = @(Get-Content -LiteralPath $managedHostsFile | Where-Object { $_ })
     if ($managed -notcontains $Name) {
         [IO.File]::AppendAllText($managedHostsFile, $Name + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    }
+}
+
+function Sync-ManagedProviderFiles {
+    param([Parameter(Mandatory)][string]$Name)
+
+    $codexHome = if ($env:CODEX_HOME) { [IO.Path]::GetFullPath($env:CODEX_HOME) } else { Join-Path $env:USERPROFILE ".codex" }
+    $providerDir = Join-Path $codexHome "codex-dp"
+    $registryPath = Join-Path $providerDir "providers.toml"
+    if (-not (Test-Path -LiteralPath $registryPath -PathType Leaf)) {
+        return
+    }
+    $ssh = Get-Command ssh -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    $scp = Get-Command scp -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    Write-Host "Syncing managed provider configuration to SSH host: $Name"
+    & $ssh.Source -- $Name 'set -eu; umask 077; mkdir -p "$HOME/.codex/codex-dp"'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not prepare the remote provider directory on $Name."
+    }
+    & $scp.Source -- $registryPath "${Name}:~/.codex/codex-dp/providers.toml"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not sync providers.toml to $Name."
+    }
+    $secretsPath = Join-Path $providerDir "secrets.json"
+    if (Test-Path -LiteralPath $secretsPath -PathType Leaf) {
+        & $scp.Source -- $secretsPath "${Name}:~/.codex/codex-dp/secrets.json"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not sync provider secrets to $Name."
+        }
+    }
+    & $ssh.Source -- $Name 'set -eu; chmod 600 "$HOME/.codex/codex-dp/providers.toml"; test ! -f "$HOME/.codex/codex-dp/secrets.json" || chmod 600 "$HOME/.codex/codex-dp/secrets.json"; "$HOME/.local/bin/codex" provider apply'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not apply managed providers on $Name."
     }
 }
 
@@ -145,6 +179,7 @@ bash "$tmp" --ssh-remote --release '__RELEASE_TAG__'
     if ($LASTEXITCODE -ne 0) {
         throw "Remote installation failed for SSH host: $Name"
     }
+    Sync-ManagedProviderFiles -Name $Name
     Register-ManagedHost -Name $Name
     Write-Host "Registered managed SSH host: $Name"
 }
@@ -172,6 +207,7 @@ function Update-ManagedRemoteHosts {
             $remoteVersion = ([string]($remoteVersion | Select-Object -First 1)).Trim()
             if ($DesiredPackageVersion -and $remoteVersion -eq $DesiredPackageVersion) {
                 Write-Host "Already current on SSH host: $name ($DesiredPackageVersion)"
+                Sync-ManagedProviderFiles -Name $name
                 continue
             }
             Install-RemoteHost -Name $name
@@ -324,36 +360,6 @@ try {
         throw "Installed package metadata does not contain a version."
     }
 
-    $codexHome = if ($env:CODEX_HOME) { [IO.Path]::GetFullPath($env:CODEX_HOME) } else { Join-Path $env:USERPROFILE ".codex" }
-    $modelCatalogDir = Join-Path $codexHome "model-catalogs"
-    New-Item -ItemType Directory -Path $modelCatalogDir -Force | Out-Null
-    Copy-Item -LiteralPath $catalogPath -Destination (Join-Path $modelCatalogDir $catalogName) -Force
-
-    $configPath = Join-Path $codexHome "config.toml"
-    if (-not (Test-Path -LiteralPath $configPath)) {
-        New-Item -ItemType File -Path $configPath -Force | Out-Null
-    }
-    $configText = Get-Content -LiteralPath $configPath -Raw
-    if ($configText -notmatch '(?m)^\s*\[model_providers\.deepseek\]\s*(?:#.*)?$') {
-        if ((Get-Item -LiteralPath $configPath).Length -gt 0) {
-            Copy-Item -LiteralPath $configPath -Destination ($configPath + ".bak." + (Get-Date -Format "yyyyMMddHHmmss"))
-        }
-        $providerConfig = @"
-
-[model_providers.deepseek]
-name = "DeepSeek"
-base_url = "https://api.deepseek.com/"
-env_key = "DEEPSEEK_API_KEY"
-wire_api = "responses"
-supports_websockets = false
-"@
-        [IO.File]::AppendAllText(
-            $configPath,
-            $providerConfig + [Environment]::NewLine,
-            [Text.UTF8Encoding]::new($false)
-        )
-    }
-
     $codexPath = Join-Path $currentDir "bin\codex.exe"
     $launcherDir = Join-Path $env:LOCALAPPDATA "CodexDeepSeekLauncher"
     $launcherPath = Join-Path $launcherDir "codex-dp.cmd"
@@ -385,6 +391,17 @@ supports_websockets = false
     $env:CODEX_DEEPSEEK_INSTALL_DIR = $resolvedInstallDir
     if (-not (($env:Path -split ';') | Where-Object { $_.TrimEnd('\') -ieq $launcherDir.TrimEnd('\') })) {
         $env:Path = "$launcherDir;$env:Path"
+    }
+
+    & $codexPath provider init-deepseek --store-key-from-env DEEPSEEK_API_KEY | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to initialize the DeepSeek provider preset."
+    }
+    if ($ConfigureProvider) {
+        & $codexPath provider add
+        if ($LASTEXITCODE -ne 0) {
+            throw "Interactive provider setup failed."
+        }
     }
 
     & $codexPath features enable multi_agent_v2 | Out-Host
