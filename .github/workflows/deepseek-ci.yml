@@ -178,4 +178,4 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_uses_explicit_model_route
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_provider_tools_use_plaintext_message_schemas
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
-          CARGO_BUILD_JOBS=1 just test -p codex-core --lib provider_prefix_routes_child_to_external_responses_provider
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
