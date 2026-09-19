@@ -49,6 +49,11 @@ pub(crate) fn apply_external_model_route(
     let (provider_id, api_model) = if let Some(route) = explicit_route {
         validate_explicit_route(config, requested_model, &route)?;
         (route.provider, route.api_model)
+    } else if current_external_provider_has_model(config, requested_model)? {
+        (
+            config.model_provider_id.clone(),
+            requested_model.to_string(),
+        )
     } else if let Some(provider_id) = matching_external_provider_id(config, requested_model) {
         (provider_id, requested_model.to_string())
     } else {
@@ -76,6 +81,23 @@ pub(crate) fn apply_external_model_route(
         role_name: None,
         model: api_model,
     })
+}
+
+fn current_external_provider_has_model(
+    config: &Config,
+    requested_model: &str,
+) -> Result<bool, String> {
+    if config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID {
+        return Ok(false);
+    }
+    Ok(
+        load_external_provider_catalog(config, &config.model_provider_id)?.is_some_and(|catalog| {
+            catalog
+                .models
+                .iter()
+                .any(|model| model.slug == requested_model)
+        }),
+    )
 }
 
 /// Returns picker metadata from configured external-provider catalogs.

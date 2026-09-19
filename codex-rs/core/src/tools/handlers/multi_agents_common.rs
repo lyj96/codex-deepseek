@@ -32,6 +32,7 @@ pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIME
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 pub(crate) const MAX_SPAWN_AGENT_MODEL_OVERRIDES: usize = 5;
+pub(crate) const MAX_EXTERNAL_SPAWN_AGENT_MODEL_OVERRIDES: usize = 64;
 
 #[derive(Clone, Copy)]
 pub(crate) enum SpawnAgentModelSelection {

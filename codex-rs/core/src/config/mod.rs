@@ -4439,15 +4439,32 @@ impl Config {
                 .unwrap_or_default(),
             otel,
         };
-        if config.model_catalog.is_none()
-            && config.model_provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID
-        {
-            let provider_id = config.model_provider_id.clone();
-            crate::agent::external_model_route::apply_external_provider_catalog(
+        let routed_model = config.model.clone().map(|requested_model| {
+            crate::agent::external_model_route::apply_external_model_route(
                 &mut config,
-                &provider_id,
+                &requested_model,
             )
-            .map_err(|message| std::io::Error::new(ErrorKind::InvalidData, message))?;
+        });
+        match routed_model.transpose().map_err(|message| {
+            std::io::Error::new(ErrorKind::InvalidData, message)
+        })? {
+            Some(crate::agent::external_model_route::ExternalModelRoute::Applied {
+                model,
+                ..
+            }) => config.model = Some(model),
+            Some(crate::agent::external_model_route::ExternalModelRoute::NotMatched) | None
+                if config.model_catalog.is_none()
+                    && config.model_provider_id
+                        != codex_model_provider_info::OPENAI_PROVIDER_ID =>
+            {
+                let provider_id = config.model_provider_id.clone();
+                crate::agent::external_model_route::apply_external_provider_catalog(
+                    &mut config,
+                    &provider_id,
+                )
+                .map_err(|message| std::io::Error::new(ErrorKind::InvalidData, message))?;
+            }
+            Some(crate::agent::external_model_route::ExternalModelRoute::NotMatched) | None => {}
         }
         Ok(config)
         })
