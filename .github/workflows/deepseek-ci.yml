@@ -180,3 +180,55 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_provider_tools_use_plaintext_message_schemas
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
+
+  windows-installer:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Test deferred cleanup of a locked backup
+        shell: pwsh
+        run: |
+          . ./contrib/deepseek-subagents/install-windows.ps1 -DiscoverSsh | Out-Null
+          $cleanupRoot = Join-Path $env:RUNNER_TEMP "deferred-cleanup-windows"
+          $cleanupTarget = Join-Path $cleanupRoot "previous-test"
+          $cleanupFile = Join-Path $cleanupTarget "old.exe"
+          $cleanupReady = Join-Path $cleanupRoot "lock-ready"
+          New-Item -ItemType Directory -Path $cleanupTarget -Force | Out-Null
+          [IO.File]::WriteAllText($cleanupFile, "test")
+          $lockScript = @(
+            "`$handle = [IO.File]::Open('$cleanupFile', [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)"
+            'try {'
+            "  [IO.File]::WriteAllText('$cleanupReady', 'ready')"
+            '  Start-Sleep -Seconds 2'
+            '} finally {'
+            '  $handle.Dispose()'
+            '}'
+          ) -join [Environment]::NewLine
+          $lockCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($lockScript))
+          $lockProcess = Start-Process -FilePath (Get-Process -Id $PID).Path `
+            -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $lockCommand) `
+            -WindowStyle Hidden `
+            -PassThru
+          for ($attempt = 0; $attempt -lt 20 -and -not (Test-Path -LiteralPath $cleanupReady); $attempt++) {
+            Start-Sleep -Milliseconds 100
+          }
+          if (-not (Test-Path -LiteralPath $cleanupReady)) {
+            throw "Windows cleanup lock process did not start."
+          }
+          if (-not (Start-DeferredInstallCleanup -InstallRoot $cleanupRoot -Paths @($cleanupTarget))) {
+            throw "Windows deferred cleanup helper did not start."
+          }
+          Start-Sleep -Milliseconds 500
+          if (-not (Test-Path -LiteralPath $cleanupTarget)) {
+            throw "Windows deferred cleanup removed a locked backup directory."
+          }
+          $lockProcess.WaitForExit()
+          for ($attempt = 0; $attempt -lt 40 -and (Test-Path -LiteralPath $cleanupTarget); $attempt++) {
+            Start-Sleep -Milliseconds 250
+          }
+          if (Test-Path -LiteralPath $cleanupTarget) {
+            throw "Windows deferred cleanup helper did not remove the backup directory."
+          }
