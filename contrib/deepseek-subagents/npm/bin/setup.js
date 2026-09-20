@@ -147,9 +147,21 @@ function unixArguments(args, releaseTag) {
   return [...args, "--release", releaseTag];
 }
 
-function run(command, args) {
+export function windowsPowerShellEnv(baseEnv = process.env) {
+  const env = { ...baseEnv };
+  // Windows PowerShell 5.1 cannot load some inbox modules when Node inherits a
+  // PowerShell 7 PSModulePath. Let 5.1 rebuild its own default module path.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === "psmodulepath") {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
+function run(command, args, env = process.env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: "inherit", env: process.env });
+    const child = spawn(command, args, { stdio: "inherit", env });
     child.on("error", reject);
     child.on("exit", (exitCode, signal) => {
       if (signal) {
@@ -206,15 +218,19 @@ export async function runSetup(args) {
 
     chmodSync(installerPath, 0o700);
     if (process.platform === "win32") {
-      await run("powershell.exe", [
-        "-NoLogo",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        installerPath,
-        ...windowsArguments(args, releaseTag),
-      ]);
+      await run(
+        "powershell.exe",
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          installerPath,
+          ...windowsArguments(args, releaseTag),
+        ],
+        windowsPowerShellEnv(),
+      );
     } else {
       await run("bash", [installerPath, ...unixArguments(args, releaseTag)]);
     }
