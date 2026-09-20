@@ -49,7 +49,10 @@ local Cargo `target` directories, temporary release worktrees, extracted
 packages, and download caches. Keep only the latest verified executable in each
 local installation directory. The installers retain the old `current`
 directory only as a rollback backup during installation and delete all
-`previous-*` backups after the new version is configured successfully.
+`previous-*` backups after the new version is configured successfully. On
+Windows, a running Codex Desktop process can keep an old helper executable
+locked; the installer must treat that as deferred cleanup, exit successfully,
+and remove the backup automatically after the desktop process releases it.
 
 Never clean up before the replacement binary passes its smoke test, and never
 remove source trees, Git history, GitHub Release assets, provider registries,

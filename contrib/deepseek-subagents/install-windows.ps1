@@ -56,6 +56,73 @@ function Get-LocalDeepSeekKey {
     return $key
 }
 
+function Start-DeferredInstallCleanup {
+    param(
+        [Parameter(Mandatory)][string]$InstallRoot,
+        [Parameter(Mandatory)][string[]]$Paths
+    )
+
+    $resolvedRoot = [IO.Path]::GetFullPath($InstallRoot)
+    $expectedPrefix = $resolvedRoot.TrimEnd('\') + '\'
+    $safePaths = @(
+        $Paths | ForEach-Object {
+            $resolvedPath = [IO.Path]::GetFullPath($_)
+            if (-not $resolvedPath.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to defer cleanup outside InstallDir: $resolvedPath"
+            }
+            if ([IO.Path]::GetFileName($resolvedPath) -notlike 'previous-*') {
+                throw "Refusing to defer cleanup for a non-backup directory: $resolvedPath"
+            }
+            $resolvedPath
+        }
+    )
+    if ($safePaths.Count -eq 0) {
+        return $false
+    }
+
+    $payloadJson = @{ Root = $resolvedRoot; Paths = $safePaths } | ConvertTo-Json -Compress
+    $payloadBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payloadJson))
+    $cleanupScript = @"
+`$payloadJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$payloadBase64'))
+`$payload = `$payloadJson | ConvertFrom-Json
+`$root = [IO.Path]::GetFullPath([string]`$payload.Root)
+`$expectedPrefix = `$root.TrimEnd('\') + '\'
+`$targets = @(`$payload.Paths)
+for (`$attempt = 0; `$attempt -lt 17280; `$attempt++) {
+    `$remaining = @()
+    foreach (`$candidate in `$targets) {
+        `$target = [IO.Path]::GetFullPath([string]`$candidate)
+        if (-not `$target.StartsWith(`$expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) { exit 2 }
+        if ([IO.Path]::GetFileName(`$target) -notlike 'previous-*') { exit 2 }
+        if ([IO.Directory]::Exists(`$target)) {
+            try { [IO.Directory]::Delete(`$target, `$true) } catch { `$remaining += `$target }
+        }
+    }
+    if (`$remaining.Count -eq 0) { exit 0 }
+    `$targets = `$remaining
+    Start-Sleep -Seconds 5
+}
+exit 1
+"@
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanupScript))
+    $shellPath = (Get-Process -Id $PID).Path
+    if ([string]::IsNullOrWhiteSpace($shellPath)) {
+        $shellPath = (Get-Command powershell.exe -CommandType Application -ErrorAction Stop).Source
+    }
+    $startProcessParameters = @{
+        FilePath = $shellPath
+        ArgumentList = @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCommand)
+        PassThru = $true
+    }
+    if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [Runtime.InteropServices.OSPlatform]::Windows
+    )) {
+        $startProcessParameters.WindowStyle = 'Hidden'
+    }
+    $null = Start-Process @startProcessParameters
+    return $true
+}
+
 function Register-ManagedHost {
     param([Parameter(Mandatory)][string]$Name)
 
@@ -426,20 +493,45 @@ try {
         Get-ChildItem -LiteralPath $resolvedInstallDir -Directory -Force |
             Where-Object { $_.Name -like 'previous-*' }
     )
+    $removedPreviousCount = 0
+    $deferredPreviousPaths = @()
     foreach ($previousInstallation in $previousInstallations) {
         $previousPath = [IO.Path]::GetFullPath($previousInstallation.FullName)
         $expectedPrefix = $resolvedInstallDir.TrimEnd('\') + '\'
         if (-not $previousPath.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Refusing to remove an installation backup outside InstallDir: $previousPath"
         }
-        Remove-Item -LiteralPath $previousPath -Recurse -Force
+        try {
+            Remove-Item -LiteralPath $previousPath -Recurse -Force -ErrorAction Stop
+            $removedPreviousCount++
+        }
+        catch {
+            $deferredPreviousPaths += $previousPath
+        }
+    }
+    $deferredCleanupStarted = $false
+    if ($deferredPreviousPaths.Count -gt 0) {
+        try {
+            $deferredCleanupStarted = Start-DeferredInstallCleanup `
+                -InstallRoot $resolvedInstallDir `
+                -Paths $deferredPreviousPaths
+        }
+        catch {
+            Write-Warning "Could not start deferred cleanup for in-use installation backups: $($_.Exception.Message)"
+        }
     }
 
     Write-Host "Installed Codex DeepSeek to: $currentDir"
     Write-Host "CODEX_CLI_PATH: $codexPath"
     Write-Host "CLI command: codex-dp"
-    if ($previousInstallations.Count -gt 0) {
-        Write-Host "Removed $($previousInstallations.Count) previous installation backup(s)."
+    if ($removedPreviousCount -gt 0) {
+        Write-Host "Removed $removedPreviousCount previous installation backup(s)."
+    }
+    if ($deferredCleanupStarted) {
+        Write-Host "Deferred cleanup for $($deferredPreviousPaths.Count) in-use installation backup(s); fully quitting Codex Desktop will allow cleanup to finish."
+    }
+    elseif ($deferredPreviousPaths.Count -gt 0) {
+        Write-Warning "$($deferredPreviousPaths.Count) in-use installation backup(s) remain. Fully quit Codex Desktop, then run the installer again to clean them."
     }
     Write-Host "Fully quit and reopen Codex Desktop before using DeepSeek subagents."
 }
