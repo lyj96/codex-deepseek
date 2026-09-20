@@ -332,8 +332,15 @@ xml_wrapper="$(printf '%s' "$wrapper" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -
 launchctl bootout "gui/$(id -u)" "$launch_agent" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$launch_agent"
 
+removed_previous=0
+for previous_dir in "$install_dir"/previous-*; do
+  [[ -e "$previous_dir" || -L "$previous_dir" ]] || continue
+  rm -rf -- "$previous_dir"
+  removed_previous=$((removed_previous + 1))
+done
+
 echo "Installed Codex DeepSeek to: $current_dir"
 echo "CLI command: codex-dp"
-[[ -z "$backup_dir" ]] || echo "Previous installation kept at: $backup_dir"
+[[ "$removed_previous" -eq 0 ]] || echo "Removed $removed_previous previous installation backup(s)."
 echo "Fully quit and reopen Codex Desktop before using DeepSeek subagents."
 offer_remote_updates "$package_version"

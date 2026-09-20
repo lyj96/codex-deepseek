@@ -6,6 +6,7 @@
 //! backwards compatibility.
 
 use crate::config::Config;
+use crate::config::ConfiguredExternalModel;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use serde::Deserialize;
@@ -49,6 +50,11 @@ pub(crate) fn apply_external_model_route(
     let (provider_id, api_model) = if let Some(route) = explicit_route {
         validate_explicit_route(config, requested_model, &route)?;
         (route.provider, route.api_model)
+    } else if current_external_provider_has_model(config, requested_model)? {
+        (
+            config.model_provider_id.clone(),
+            requested_model.to_string(),
+        )
     } else if let Some(provider_id) = matching_external_provider_id(config, requested_model) {
         (provider_id, requested_model.to_string())
     } else {
@@ -78,8 +84,25 @@ pub(crate) fn apply_external_model_route(
     })
 }
 
-/// Returns picker metadata from configured external-provider catalogs.
-pub(crate) fn configured_model_presets(config: &Config) -> Vec<ModelPreset> {
+fn current_external_provider_has_model(
+    config: &Config,
+    requested_model: &str,
+) -> Result<bool, String> {
+    if config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID {
+        return Ok(false);
+    }
+    Ok(
+        load_external_provider_catalog(config, &config.model_provider_id)?.is_some_and(|catalog| {
+            catalog
+                .models
+                .iter()
+                .any(|model| model.slug == requested_model)
+        }),
+    )
+}
+
+/// Returns provider-aware picker metadata from configured external-provider catalogs.
+pub(crate) fn configured_external_models(config: &Config) -> Vec<ConfiguredExternalModel> {
     let mut models = BTreeMap::new();
 
     if let Ok(Some(routes)) = load_external_model_routes(config) {
@@ -100,7 +123,17 @@ pub(crate) fn configured_model_presets(config: &Config) -> Vec<ModelPreset> {
             let mut preset: ModelPreset = model.into();
             preset.id.clone_from(&public_model);
             preset.model.clone_from(&public_model);
-            models.insert(public_model, preset);
+            let provider_name = external_provider_name(config, &route.provider);
+            append_provider_label(&mut preset, &provider_name);
+            models.insert(
+                public_model,
+                ConfiguredExternalModel {
+                    provider_id: route.provider,
+                    provider_name,
+                    api_model: route.api_model,
+                    preset,
+                },
+            );
         }
     }
 
@@ -117,13 +150,77 @@ pub(crate) fn configured_model_presets(config: &Config) -> Vec<ModelPreset> {
             .into_iter()
             .filter(|model| model.slug.starts_with(provider_id.as_str()))
         {
-            models
-                .entry(model.slug.clone())
-                .or_insert_with(|| model.into());
+            let public_model = model.slug.clone();
+            let api_model = model.slug.clone();
+            if models.values().any(|configured| {
+                configured.provider_id == provider_id.as_str()
+                    && configured.api_model == api_model.as_str()
+            }) {
+                continue;
+            }
+            let provider_name = external_provider_name(config, provider_id);
+            models.entry(public_model).or_insert_with(|| {
+                let mut preset = model.into();
+                append_provider_label(&mut preset, &provider_name);
+                ConfiguredExternalModel {
+                    provider_id: provider_id.clone(),
+                    provider_name,
+                    api_model,
+                    preset,
+                }
+            });
         }
     }
 
     models.into_values().collect()
+}
+
+/// Returns picker metadata for the external-agent tool schema.
+pub(crate) fn configured_model_presets(config: &Config) -> Vec<ModelPreset> {
+    configured_external_models(config)
+        .into_iter()
+        .map(|model| model.preset)
+        .collect()
+}
+
+pub(crate) fn configured_external_model(
+    config: &Config,
+    requested_model: &str,
+) -> Option<ConfiguredExternalModel> {
+    configured_external_models(config)
+        .into_iter()
+        .find(|model| model.preset.model == requested_model)
+}
+
+pub(crate) fn provider_id_for_model(config: &Config, requested_model: &str) -> String {
+    if let Some(model) = configured_external_model(config, requested_model) {
+        return model.provider_id;
+    }
+    if current_external_provider_has_model(config, requested_model).unwrap_or(false) {
+        return config.model_provider_id.clone();
+    }
+    matching_external_provider_id(config, requested_model)
+        .unwrap_or_else(|| codex_model_provider_info::OPENAI_PROVIDER_ID.to_string())
+}
+
+fn external_provider_name(config: &Config, provider_id: &str) -> String {
+    config
+        .model_providers
+        .get(provider_id)
+        .map(|provider| provider.name.trim())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(provider_id)
+        .to_string()
+}
+
+fn append_provider_label(preset: &mut ModelPreset, provider_name: &str) {
+    let suffix = format!(" [{provider_name}]");
+    if preset.display_name.trim().is_empty() {
+        preset.display_name.clone_from(&preset.model);
+    }
+    if !preset.display_name.ends_with(&suffix) {
+        preset.display_name.push_str(&suffix);
+    }
 }
 
 fn validate_explicit_route(

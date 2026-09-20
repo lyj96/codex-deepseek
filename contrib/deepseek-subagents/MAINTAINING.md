@@ -41,3 +41,17 @@ stable `CODEX_CLI_PATH`. Upstream updates therefore do not overwrite the fork,
 but app-server protocol changes can still require a matching fork build. For
 each new stable upstream tag, merge it, reset the DeepSeek revision to `.1`, and
 publish the matching release promptly.
+
+## Mandatory post-build cleanup
+
+After a version has been built, tested, published, and smoke-tested, remove its
+local Cargo `target` directories, temporary release worktrees, extracted
+packages, and download caches. Keep only the latest verified executable in each
+local installation directory. The installers retain the old `current`
+directory only as a rollback backup during installation and delete all
+`previous-*` backups after the new version is configured successfully.
+
+Never clean up before the replacement binary passes its smoke test, and never
+remove source trees, Git history, GitHub Release assets, provider registries,
+model routes, user configuration, or secrets. Record the reclaimed disk space
+in the release maintenance report.

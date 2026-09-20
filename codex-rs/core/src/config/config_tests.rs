@@ -9586,6 +9586,95 @@ wire_api = "responses"
 }
 
 #[tokio::test]
+async fn main_session_routes_public_external_model_to_api_model() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let catalog_dir = codex_home.path().join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir)?;
+    let mut catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    catalog.models = catalog.models.into_iter().take(1).collect();
+    catalog.models[0].slug = "deepseek-v4-1-flash-260910".to_string();
+    std::fs::write(
+        catalog_dir.join("volcengine.json"),
+        serde_json::to_string(&catalog).expect("serialize catalog"),
+    )?;
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        r#"{
+            "version": 1,
+            "models": {
+                "volc-deepseek-v4.1-flash": {
+                    "provider": "volcengine",
+                    "api_model": "deepseek-v4-1-flash-260910"
+                }
+            }
+        }"#,
+    )?;
+
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+model = "volc-deepseek-v4.1-flash"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/"
+env_key = "DEEPSEEK_API_KEY"
+wire_api = "responses"
+
+[model_providers.volcengine]
+name = "Volcano Ark"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+env_key = "ARK_API_KEY"
+wire_api = "responses"
+"#,
+    )
+    .expect("external provider config should parse");
+
+    let mut config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.model_provider_id, "volcengine");
+    assert_eq!(config.model.as_deref(), Some("deepseek-v4-1-flash-260910"));
+    assert_eq!(config.model_catalog, Some(catalog));
+    let configured = config.configured_external_models();
+    assert_eq!(configured.len(), 1);
+    assert_eq!(configured[0].provider_id, "volcengine");
+    assert_eq!(configured[0].provider_name, "Volcano Ark");
+    assert_eq!(configured[0].api_model, "deepseek-v4-1-flash-260910");
+    assert_eq!(configured[0].preset.model, "volc-deepseek-v4.1-flash");
+    assert!(
+        configured[0]
+            .preset
+            .display_name
+            .ends_with(" [Volcano Ark]")
+    );
+    assert_eq!(
+        config.provider_id_for_model("volc-deepseek-v4.1-flash"),
+        "volcengine"
+    );
+
+    let requested_model = config.model.clone().expect("routed model");
+    let second_route = crate::agent::external_model_route::apply_external_model_route(
+        &mut config,
+        &requested_model,
+    )
+    .expect("routing an API model a second time should remain stable");
+    assert_eq!(
+        second_route,
+        crate::agent::external_model_route::ExternalModelRoute::Applied {
+            role_name: None,
+            model: requested_model,
+        }
+    );
+    assert_eq!(config.model_provider_id, "volcengine");
+    Ok(())
+}
+
+#[tokio::test]
 async fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let catalog_path = codex_home.path().join("catalog.json");

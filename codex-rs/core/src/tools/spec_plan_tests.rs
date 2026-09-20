@@ -2889,6 +2889,21 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas() 
         );
         assert!(tool.description.contains("external model provider"));
         assert!(tool.description.contains("redacted from tool logs"));
+        if tool_name == SPAWN_EXTERNAL_AGENT_TOOL_NAME {
+            assert!(
+                tool.description
+                    .contains("across configured external providers")
+            );
+            let fork_turns_description = properties
+                .get("fork_turns")
+                .and_then(|schema| schema.description.as_deref())
+                .expect("external spawn should describe fork_turns behavior");
+            assert!(
+                fork_turns_description
+                    .contains("even when the target uses another configured external provider")
+            );
+            assert!(fork_turns_description.contains("encrypted OpenAI history cannot cross"));
+        }
     }
 
     let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {

@@ -170,9 +170,11 @@ impl CatalogRequestProcessor {
         &self,
         params: ModelListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         Self::list_models(
             self.thread_manager.clone(),
-            self.config.http_client_factory(),
+            &config,
+            config.http_client_factory(),
             params,
         )
         .await
@@ -242,6 +244,7 @@ impl CatalogRequestProcessor {
 
     async fn list_models(
         thread_manager: Arc<ThreadManager>,
+        config: &Config,
         http_client_factory: codex_http_client::HttpClientFactory,
         params: ModelListParams,
     ) -> Result<ModelListResponse, JSONRPCErrorError> {
@@ -252,6 +255,7 @@ impl CatalogRequestProcessor {
         } = params;
         let models = supported_models(
             thread_manager,
+            config,
             include_hidden.unwrap_or(false),
             http_client_factory,
         )

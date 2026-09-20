@@ -166,6 +166,19 @@ codex-dp provider add
 每个模型可以使用独立的公开名称和 Provider 真实模型名，例如公开名称 `company-fast`
 可以映射到 API 模型 `vendor/model-v3`，不再要求模型名以 Provider 名开头。
 
+配置完成并重启 Codex 后：
+
+- `/model` 会统一显示 OpenAI 和所有已配置 Provider 的模型；外部模型显示为
+  `模型名称 [Provider]`，方括号仅用于界面区分，不会传给模型 API。
+- `/provider` 先选择 Provider，再只显示该 Provider 的模型。它只是筛选入口，不会单独修改配置。
+- 同一 Provider 内可以在当前任务切换模型。切换到另一个 Provider 时会明确提示并创建一个
+  不复制历史的新任务，避免把旧任务的认证、协议和上下文错误地带到新 Provider。
+- Codex Desktop 复用同一份模型列表；请在新建任务时选择另一个 Provider 的模型。运行中的
+  Desktop 任务若尝试跨 Provider 切换，后端会拒绝并提示新建任务。
+
+模型选择会一次性确定公开模型名、Provider、真实 API 模型名和思考程度；配置文件持久化的是
+公开模型名，后续启动时再由 `routes.json` 精确解析，不依赖模型名前缀猜测 Provider。
+
 常用管理命令：
 
 ```bash
@@ -219,3 +232,7 @@ Messages 等协议需要单独适配器，不能只修改 URL 直接使用。
 
 但 Codex App 与 CLI 的内部协议可能随版本变化。我们会按上游 Codex 版本发布对应版本；
 更新 Codex App 后如果出现不兼容，重新运行上面的一键安装命令即可升级到最新 Fork。
+
+安装器在新版本完成校验和配置后会自动删除 `previous-*` 安装备份，安装目录只保留当前已验证
+版本；下载临时文件也会随安装结束清理。Provider 清单、模型路由和密钥不在安装目录中，不会
+因此被删除。

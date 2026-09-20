@@ -3318,6 +3318,124 @@ async fn model_selection_popup_snapshot() {
     assert_chatwidget_snapshot!("model_selection_popup", popup);
 }
 
+fn install_test_external_model(
+    chat: &mut ChatWidget,
+    provider_id: &str,
+    provider_name: &str,
+    public_model: &str,
+    api_model: &str,
+) {
+    let catalog_dir = chat.config.codex_home.join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir).expect("create model catalogs");
+    let mut catalog = codex_models_manager::bundled_models_response().expect("bundled models");
+    catalog.models.truncate(1);
+    catalog.models[0].slug = api_model.to_string();
+    catalog.models[0].display_name = "Qwen 3.8 Max".to_string();
+    std::fs::write(
+        catalog_dir.join(format!("{provider_id}.json")),
+        serde_json::to_string(&catalog).expect("serialize model catalog"),
+    )
+    .expect("write model catalog");
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        serde_json::json!({
+            "version": 1,
+            "models": {
+                (public_model): {
+                    "provider": provider_id,
+                    "api_model": api_model,
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write routes");
+    chat.config.model_providers.insert(
+        provider_id.to_string(),
+        codex_model_provider_info::ModelProviderInfo {
+            name: provider_name.to_string(),
+            base_url: Some("https://example.com/compatible-mode/v1".to_string()),
+            env_key: Some("QWEN_API_KEY".to_string()),
+            ..Default::default()
+        },
+    );
+}
+
+#[tokio::test]
+async fn provider_popup_and_cross_provider_confirmation_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    install_test_external_model(&mut chat, "qwen", "Qwen", "qwen-max", "qwen3.8-max");
+
+    chat.open_provider_popup();
+    assert_chatwidget_snapshot!(
+        "provider_selection_popup",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+
+    while rx.try_recv().is_ok() {}
+    for action in chat.model_selection_actions(
+        "qwen-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+        /*should_prompt_plan_mode_scope*/ false,
+    ) {
+        action(&chat.app_event_tx);
+    }
+    let AppEvent::OpenProviderSwitchConfirmation {
+        model,
+        effort,
+        provider_name,
+    } = rx.try_recv().expect("provider switch confirmation event")
+    else {
+        panic!("expected provider switch confirmation");
+    };
+    chat.open_provider_switch_confirmation(model, effort, provider_name);
+    assert_chatwidget_snapshot!(
+        "provider_switch_confirmation_popup",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistModelSelection {
+            model,
+            effort: Some(ReasoningEffortConfig::High),
+        }) if model == "qwen-max"
+    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::NewSession { name: None }));
+}
+
+#[tokio::test]
+async fn same_provider_selection_uses_api_model_and_persists_public_model() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    install_test_external_model(&mut chat, "qwen", "Qwen", "qwen-max", "qwen3.8-max");
+    chat.config.model_provider_id = "qwen".to_string();
+    chat.config.model_provider = chat.config.model_providers["qwen"].clone();
+    chat.set_model("qwen3.8-max");
+    while rx.try_recv().is_ok() {}
+
+    for action in chat.model_selection_actions(
+        "qwen-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+        /*should_prompt_plan_mode_scope*/ false,
+    ) {
+        action(&chat.app_event_tx);
+    }
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::UpdateModel(model)) if model == "qwen3.8-max");
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateReasoningEffort(Some(
+            ReasoningEffortConfig::High
+        )))
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistModelSelection { model, effort: Some(ReasoningEffortConfig::High) })
+            if model == "qwen-max"
+    );
+}
+
 fn apply_model_list_response(chat: &mut ChatWidget, presets: Vec<ModelPreset>) {
     let request_id = chat.model_popup_request_id.expect("pending model request");
     assert!(chat.on_models_loaded(request_id, Ok(presets)));

@@ -39,6 +39,8 @@ use crate::tools::handlers::multi_agents::SendInputHandler;
 use crate::tools::handlers::multi_agents::SpawnAgentHandler;
 use crate::tools::handlers::multi_agents::WaitAgentHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MAX_EXTERNAL_SPAWN_AGENT_MODEL_OVERRIDES;
+use crate::tools::handlers::multi_agents_common::MAX_SPAWN_AGENT_MODEL_OVERRIDES;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::FOLLOWUP_EXTERNAL_TASK_TOOL_NAME;
@@ -1303,6 +1305,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 turn_context.config.multi_agent_v2.hide_spawn_agent_metadata;
             let spawn_options = SpawnAgentToolOptions {
                 available_models: turn_context.available_models.clone(),
+                max_model_overrides: MAX_SPAWN_AGENT_MODEL_OVERRIDES,
                 agent_type_description,
                 expose_agent_type: !turn_context.config.agent_roles.is_empty(),
                 hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
@@ -1350,11 +1353,13 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             if !external_models.is_empty() {
                 let mut external_spawn_options = spawn_options;
                 external_spawn_options.available_models = external_models;
+                external_spawn_options.max_model_overrides =
+                    MAX_EXTERNAL_SPAWN_AGENT_MODEL_OVERRIDES;
                 registry.register_trusted_with_exposure(
                     plaintext_external_agent_handler(
                         SpawnAgentHandlerV2::new(external_spawn_options),
                         SPAWN_EXTERNAL_AGENT_TOOL_NAME,
-                        "Spawn an agent using a configured external model provider. Set `model` to one of the configured external model ids; `agent_type` is optional. Set `fork_turns` to `none`.",
+                        "Spawn an agent using a configured external model provider. Set `model` to one of the configured external model ids; `agent_type` is optional. External-provider agents may use `fork_turns`=`all` or a positive integer to inherit history across configured external providers. When the current agent uses OpenAI, set `fork_turns` to `none` because encrypted OpenAI history cannot cross providers.",
                     ),
                     exposure,
                 );
@@ -1386,6 +1391,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             registry.add_with_exposure(
                 SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
+                    max_model_overrides: MAX_SPAWN_AGENT_MODEL_OVERRIDES,
                     agent_type_description,
                     expose_agent_type: !turn_context.config.agent_roles.is_empty(),
                     hide_agent_type_model_reasoning: false,
@@ -1538,6 +1544,18 @@ impl ToolExecutor<ToolInvocation> for PlaintextExternalAgentHandler {
             .and_then(|properties| properties.get_mut("message"))
         {
             message_schema.encrypted = None;
+        }
+        if self.tool_name == SPAWN_EXTERNAL_AGENT_TOOL_NAME
+            && let Some(fork_turns_schema) = tool
+                .parameters
+                .properties
+                .as_mut()
+                .and_then(|properties| properties.get_mut("fork_turns"))
+        {
+            fork_turns_schema.description = Some(
+                "Optional number of turns to fork. Defaults to `all`. External-provider agents may use `all` or a positive integer even when the target uses another configured external provider. When the current agent uses OpenAI, use `none` because encrypted OpenAI history cannot cross providers."
+                    .to_string(),
+            );
         }
         ToolSpec::Function(tool)
     }

@@ -751,6 +751,11 @@ async fn apply_registry(codex_home: &Path, registry: &ProviderRegistry) -> anyho
             models: routes,
         },
     )?;
+    if registry.providers.contains_key("deepseek") {
+        config_edits.push(ConfigEdit::ClearPath {
+            segments: vec!["agents".to_string(), "deepseek_worker".to_string()],
+        });
+    }
     ConfigEditsBuilder::new(codex_home)
         .with_edits(config_edits)
         .apply()
@@ -1306,6 +1311,40 @@ mod tests {
             .expect("config should be written");
         assert!(config.contains("[model_providers.gateway]"));
         assert!(config.contains("env_key = \"COMPANY_API_KEY\""));
+    }
+
+    #[tokio::test]
+    async fn applying_deepseek_removes_legacy_worker_role_only() {
+        let home = tempfile::tempdir().expect("temp dir should be created");
+        std::fs::write(
+            home.path().join("config.toml"),
+            r#"
+[agents.deepseek_worker]
+description = "Legacy managed DeepSeek role"
+config_file = "agents/deepseek-worker.toml"
+
+[agents.keep]
+description = "User role that must remain"
+"#,
+        )
+        .expect("legacy config should be written");
+        let registry = ProviderRegistry {
+            schema_version: REGISTRY_VERSION,
+            providers: BTreeMap::from([(
+                "deepseek".to_string(),
+                deepseek_provider().expect("DeepSeek preset should load"),
+            )]),
+        };
+
+        apply_registry(home.path(), &registry)
+            .await
+            .expect("DeepSeek registry should apply");
+
+        let config = std::fs::read_to_string(home.path().join("config.toml"))
+            .expect("config should be written");
+        assert!(!config.contains("[agents.deepseek_worker]"));
+        assert!(config.contains("[agents.keep]"));
+        assert!(config.contains("[model_providers.deepseek]"));
     }
 
     #[tokio::test]

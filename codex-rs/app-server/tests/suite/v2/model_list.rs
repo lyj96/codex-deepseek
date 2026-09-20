@@ -240,6 +240,69 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
 }
 
 #[tokio::test]
+async fn list_models_includes_configured_external_provider_models() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path()).await?;
+    let catalog_dir = codex_home.path().join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir)?;
+    let mut catalog = codex_models_manager::bundled_models_response()?;
+    catalog.models.truncate(1);
+    catalog.models[0].slug = "qwen3.8-max".to_string();
+    catalog.models[0].display_name = "Qwen 3.8 Max".to_string();
+    std::fs::write(
+        catalog_dir.join("qwen.json"),
+        serde_json::to_string(&catalog)?,
+    )?;
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        r#"{
+            "version": 1,
+            "models": {
+                "qwen-max": {
+                    "provider": "qwen",
+                    "api_model": "qwen3.8-max"
+                }
+            }
+        }"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[model_providers.qwen]
+name = "Qwen"
+base_url = "https://example.com/compatible-mode/v1"
+env_key = "QWEN_API_KEY"
+wire_api = "responses"
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let response: ModelListResponse = mcp
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams {
+                limit: Some(100),
+                cursor: None,
+                include_hidden: Some(true),
+            },
+        })
+        .await?;
+
+    let external = response
+        .data
+        .iter()
+        .find(|model| model.model == "qwen-max")
+        .expect("configured external model should be exposed");
+    assert_eq!(external.id, "qwen-max");
+    assert_eq!(external.display_name, "Qwen 3.8 Max [Qwen]");
+    assert!(!external.supported_reasoning_efforts.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_models_includes_hidden_models() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_models_cache(codex_home.path()).await?;
