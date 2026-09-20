@@ -1892,6 +1892,20 @@ impl App {
             AppEvent::OpenAllModelsPopup => {
                 self.chat_widget.open_all_models_popup();
             }
+            AppEvent::OpenProviderModels { provider_id } => {
+                self.chat_widget.open_provider_models_popup(&provider_id);
+            }
+            AppEvent::OpenProviderSwitchConfirmation {
+                model,
+                effort,
+                provider_name,
+            } => {
+                self.chat_widget.open_provider_switch_confirmation(
+                    model,
+                    effort,
+                    provider_name,
+                );
+            }
             AppEvent::OpenFullAccessConfirmation {
                 preset,
                 return_to_permissions,

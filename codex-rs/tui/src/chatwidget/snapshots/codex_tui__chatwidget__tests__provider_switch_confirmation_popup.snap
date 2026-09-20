@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Switch provider?
+
+  Changing providers starts a new task without copying conversation history.
+
+› 1. Start new task  Use qwen-max with Qwen
+  2. Cancel          Keep the current task and provider
+
+  Press enter to confirm or esc to go back

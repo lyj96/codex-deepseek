@@ -1191,6 +1191,18 @@ pub(crate) enum AppEvent {
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup,
 
+    /// Open the model picker filtered to a single provider.
+    OpenProviderModels {
+        provider_id: String,
+    },
+
+    /// Confirm that changing providers starts a new task without conversation history.
+    OpenProviderSwitchConfirmation {
+        model: String,
+        effort: Option<ReasoningEffort>,
+        provider_name: String,
+    },
+
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {
         preset: ApprovalPreset,

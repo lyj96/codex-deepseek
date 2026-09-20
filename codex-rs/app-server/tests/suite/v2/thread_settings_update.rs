@@ -388,6 +388,146 @@ async fn thread_settings_update_rejects_sandbox_policy_with_permissions() -> Res
 }
 
 #[tokio::test]
+async fn thread_settings_update_routes_same_provider_public_model_to_api_model() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("done")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_model_provider("qwen")
+        .with_provider_name("Qwen")
+        .with_model("qwen3.8-max")
+        .with_provider_config("supports_websockets = false")
+        .write(codex_home.path())?;
+    let catalog_dir = codex_home.path().join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir)?;
+    let mut catalog = codex_models_manager::bundled_models_response()?;
+    catalog.models.truncate(2);
+    catalog.models[0].slug = "qwen3.8-max".to_string();
+    catalog.models[1].slug = "qwen3.8-flash".to_string();
+    std::fs::write(
+        catalog_dir.join("qwen.json"),
+        serde_json::to_string(&catalog)?,
+    )?;
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        r#"{
+            "version": 1,
+            "models": {
+                "qwen-max": {
+                    "provider": "qwen",
+                    "api_model": "qwen3.8-max"
+                },
+                "qwen-flash": {
+                    "provider": "qwen",
+                    "api_model": "qwen3.8-flash"
+                }
+            }
+        }"#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let thread = start_thread_with_model(&mut mcp, "qwen-max").await?.thread;
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            model: Some("qwen-flash".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let updated = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(updated.thread_id, thread.id);
+    assert_eq!(updated.thread_settings.model, "qwen3.8-flash");
+
+    start_text_turn(&mut mcp, thread.id).await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request_bodies = received_response_bodies(&server).await?;
+    assert!(
+        request_bodies
+            .iter()
+            .any(|body| { body.get("model").and_then(Value::as_str) == Some("qwen3.8-flash") }),
+        "future turn did not use the routed API model: {request_bodies:#?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_rejects_cross_provider_model_switch() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(
+        r#"
+
+[model_providers.qwen]
+name = "Qwen"
+base_url = "https://example.com/compatible-mode/v1"
+env_key = "QWEN_API_KEY"
+wire_api = "responses"
+"#,
+    );
+    std::fs::write(config_path, config)?;
+    let catalog_dir = codex_home.path().join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir)?;
+    let mut catalog = codex_models_manager::bundled_models_response()?;
+    catalog.models.truncate(1);
+    catalog.models[0].slug = "qwen3.8-max".to_string();
+    std::fs::write(
+        catalog_dir.join("qwen.json"),
+        serde_json::to_string(&catalog)?,
+    )?;
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        r#"{
+            "version": 1,
+            "models": {
+                "qwen-max": {
+                    "provider": "qwen",
+                    "api_model": "qwen3.8-max"
+                }
+            }
+        }"#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let thread = start_thread(&mut mcp).await?.thread;
+    let request_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread.id,
+            model: Some("qwen-max".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        error.error.message,
+        "switching from provider `mock_provider` to `qwen` requires starting a new thread"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
         create_final_assistant_message_sse_response("done")?,
@@ -463,9 +603,16 @@ async fn start_text_turn(mcp: &mut TestAppServer, thread_id: String) -> Result<(
 }
 
 async fn start_thread(mcp: &mut TestAppServer) -> Result<ThreadStartResponse> {
+    start_thread_with_model(mcp, "mock-model").await
+}
+
+async fn start_thread_with_model(
+    mcp: &mut TestAppServer,
+    model: &str,
+) -> Result<ThreadStartResponse> {
     let request_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
-            model: Some("mock-model".to_string()),
+            model: Some(model.to_string()),
             ..Default::default()
         })
         .await?;

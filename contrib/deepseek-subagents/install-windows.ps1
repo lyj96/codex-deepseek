@@ -409,11 +409,24 @@ try {
         throw "Failed to enable multi_agent_v2."
     }
 
+    $previousInstallations = @(
+        Get-ChildItem -LiteralPath $resolvedInstallDir -Directory -Force |
+            Where-Object { $_.Name -like 'previous-*' }
+    )
+    foreach ($previousInstallation in $previousInstallations) {
+        $previousPath = [IO.Path]::GetFullPath($previousInstallation.FullName)
+        $expectedPrefix = $resolvedInstallDir.TrimEnd('\') + '\'
+        if (-not $previousPath.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to remove an installation backup outside InstallDir: $previousPath"
+        }
+        Remove-Item -LiteralPath $previousPath -Recurse -Force
+    }
+
     Write-Host "Installed Codex DeepSeek to: $currentDir"
     Write-Host "CODEX_CLI_PATH: $codexPath"
     Write-Host "CLI command: codex-dp"
-    if ($backupDir) {
-        Write-Host "Previous installation kept at: $backupDir"
+    if ($previousInstallations.Count -gt 0) {
+        Write-Host "Removed $($previousInstallations.Count) previous installation backup(s)."
     }
     Write-Host "Fully quit and reopen Codex Desktop before using DeepSeek subagents."
 }

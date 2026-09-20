@@ -5,6 +5,7 @@ use codex_app_server_protocol::ModelServiceTier;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
+use codex_core::config::Config;
 use codex_http_client::HttpClientFactory;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ModelPreset;
@@ -12,12 +13,28 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 
 pub async fn supported_models(
     thread_manager: Arc<ThreadManager>,
+    config: &Config,
     include_hidden: bool,
     http_client_factory: HttpClientFactory,
 ) -> Vec<Model> {
-    thread_manager
+    let mut presets = thread_manager
         .list_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
-        .await
+        .await;
+    if !config.model_provider.is_openai() {
+        for preset in &mut presets {
+            preset.is_default = false;
+        }
+    }
+    for external in config.configured_external_models() {
+        if presets.iter().any(|preset| preset.id == external.preset.id) {
+            continue;
+        }
+        let mut preset = external.preset;
+        preset.is_default = external.provider_id == config.model_provider_id
+            && config.model.as_deref() == Some(external.api_model.as_str());
+        presets.push(preset);
+    }
+    presets
         .into_iter()
         .filter(|preset| include_hidden || preset.show_in_picker)
         .map(model_from_preset)

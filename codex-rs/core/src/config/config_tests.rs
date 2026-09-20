@@ -9640,6 +9640,22 @@ wire_api = "responses"
     assert_eq!(config.model_provider_id, "volcengine");
     assert_eq!(config.model.as_deref(), Some("deepseek-v4-1-flash-260910"));
     assert_eq!(config.model_catalog, Some(catalog));
+    let configured = config.configured_external_models();
+    assert_eq!(configured.len(), 1);
+    assert_eq!(configured[0].provider_id, "volcengine");
+    assert_eq!(configured[0].provider_name, "Volcano Ark");
+    assert_eq!(configured[0].api_model, "deepseek-v4-1-flash-260910");
+    assert_eq!(configured[0].preset.model, "volc-deepseek-v4.1-flash");
+    assert!(
+        configured[0]
+            .preset
+            .display_name
+            .ends_with(" [Volcano Ark]")
+    );
+    assert_eq!(
+        config.provider_id_for_model("volc-deepseek-v4.1-flash"),
+        "volcengine"
+    );
 
     let requested_model = config.model.clone().expect("routed model");
     let second_route = crate::agent::external_model_route::apply_external_model_route(

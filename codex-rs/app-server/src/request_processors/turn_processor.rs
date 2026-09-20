@@ -920,11 +920,31 @@ impl TurnRequestProcessor {
     async fn thread_settings_update_inner(
         &self,
         request_id: &ConnectionRequestId,
-        params: ThreadSettingsUpdateParams,
+        mut params: ThreadSettingsUpdateParams,
     ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
+        if let Some(requested_model) = params.model.as_deref() {
+            let thread_config = thread.config().await;
+            if let Some(external) = thread_config.configured_external_model(requested_model) {
+                if external.provider_id != thread_config.model_provider_id {
+                    return Err(invalid_request(format!(
+                        "switching from provider `{}` to `{}` requires starting a new thread",
+                        thread_config.model_provider_id, external.provider_id
+                    )));
+                }
+                params.model = Some(external.api_model);
+            } else if thread_config.provider_id_for_model(requested_model)
+                != thread_config.model_provider_id
+            {
+                return Err(invalid_request(format!(
+                    "switching from provider `{}` to `{}` requires starting a new thread",
+                    thread_config.model_provider_id,
+                    thread_config.provider_id_for_model(requested_model)
+                )));
+            }
+        }
         let cwd = resolve_request_cwd(params.cwd)?;
         let environment_override = self
             .build_environment_override(

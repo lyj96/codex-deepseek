@@ -182,6 +182,12 @@ async fn handle_spawn_agent(
         }
     }
     let crosses_model_providers = config.model_provider_id != turn.config.model_provider_id;
+    if turn.config.ephemeral && fork_mode.is_some() {
+        return Err(FunctionCallError::RespondToModel(
+            "Forked subagents require persisted parent history; use `fork_turns=\"none\"` or run without `--ephemeral`."
+                .to_string(),
+        ));
+    }
     let crosses_from_openai = crosses_model_providers
         && turn.config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID;
     if crosses_from_openai && fork_mode.is_some() {

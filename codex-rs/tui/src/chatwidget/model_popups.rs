@@ -9,6 +9,7 @@ use crate::model_catalog::LUNA_RESERVE_MODEL;
 const ULTRA_REASONING_CONCURRENCY_WARNING_THRESHOLD: usize = 8;
 pub(super) const MODEL_SELECTION_VIEW_ID: &str = "model-selection";
 pub(super) const ALL_MODELS_SELECTION_VIEW_ID: &str = "all-models-selection";
+pub(super) const PROVIDER_SELECTION_VIEW_ID: &str = "provider-selection";
 
 impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
@@ -22,7 +23,7 @@ impl ChatWidget {
             return;
         }
 
-        let presets: Vec<ModelPreset> = match self.model_catalog.try_list_models() {
+        let presets: Vec<ModelPreset> = match self.unified_model_presets() {
             Ok(models) => models,
             Err(_) => {
                 self.add_info_message(
@@ -37,6 +38,95 @@ impl ChatWidget {
         self.open_model_popup_with_presets(presets);
         // Show cached choices immediately and update any still-present picker when the reply arrives.
         self.app_event_tx.send(AppEvent::FetchModels { request_id });
+    }
+
+    /// Open a provider shortcut. Choosing a provider only filters the model list;
+    /// the provider is changed atomically when a model is selected.
+    pub(crate) fn open_provider_popup(&mut self) {
+        let presets = match self.unified_model_presets() {
+            Ok(models) => models,
+            Err(_) => {
+                self.add_info_message(
+                    "Models are being updated; please try /provider again in a moment.".to_string(),
+                    /*hint*/ None,
+                );
+                return;
+            }
+        };
+        let mut providers = BTreeMap::new();
+        providers.insert(
+            codex_model_provider_info::OPENAI_PROVIDER_ID.to_string(),
+            "OpenAI".to_string(),
+        );
+        for external in self.config.configured_external_models() {
+            providers.insert(external.provider_id, external.provider_name);
+        }
+
+        let items = providers
+            .into_iter()
+            .filter_map(|(provider_id, provider_name)| {
+                let model_count = presets
+                    .iter()
+                    .filter(|preset| {
+                        self.config.provider_id_for_model(&preset.model) == provider_id
+                    })
+                    .count();
+                if model_count == 0 {
+                    return None;
+                }
+                let is_current = self.config.model_provider_id == provider_id;
+                let model_count_label = if model_count == 1 {
+                    "1 model".to_string()
+                } else {
+                    format!("{model_count} models")
+                };
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenProviderModels {
+                        provider_id: provider_id.clone(),
+                    });
+                })];
+                Some(SelectionItem {
+                    name: provider_name,
+                    description: Some(model_count_label),
+                    is_current,
+                    actions,
+                    dismiss_on_select: true,
+                    dismiss_parent_on_child_accept: true,
+                    ..Default::default()
+                })
+            })
+            .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(PROVIDER_SELECTION_VIEW_ID),
+            header: self.model_menu_header(
+                "Select Provider",
+                "Choose a provider, then select one of its models.",
+            ),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_provider_models_popup(&mut self, provider_id: &str) {
+        let presets = self
+            .unified_model_presets()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|preset| self.config.provider_id_for_model(&preset.model) == provider_id)
+            .collect();
+        self.open_all_models_popup_with_view_id(presets, ALL_MODELS_SELECTION_VIEW_ID);
+    }
+
+    fn unified_model_presets(&self) -> Result<Vec<ModelPreset>, ()> {
+        let mut presets = self.model_catalog.try_list_models().map_err(|_| ())?;
+        for external in self.config.configured_external_models() {
+            if !presets.iter().any(|preset| preset.id == external.preset.id) {
+                presets.push(external.preset);
+            }
+        }
+        Ok(presets)
     }
 
     pub(super) fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -88,11 +178,10 @@ impl ChatWidget {
             .filter(|preset| preset.show_in_picker)
             .collect();
 
-        let current_model = self.current_model();
         let current_label = presets
             .iter()
-            .find(|preset| preset.model.as_str() == current_model)
-            .map(|preset| preset.model.to_string())
+            .find(|preset| self.model_is_current(&preset.model))
+            .map(|preset| preset.display_name.to_string())
             .unwrap_or_else(|| self.model_display_name().to_string());
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
@@ -137,9 +226,9 @@ impl ChatWidget {
                     )
                 };
                 SelectionItem {
-                    name: model.clone(),
+                    name: preset.display_name.clone(),
                     description,
-                    is_current: model.as_str() == current_model,
+                    is_current: self.model_is_current(&model),
                     is_default: preset.is_default,
                     actions,
                     dismiss_on_select: !requires_advanced_selection,
@@ -204,8 +293,7 @@ impl ChatWidget {
             return;
         }
         let presets = self
-            .model_catalog
-            .try_list_models()
+            .unified_model_presets()
             .unwrap_or_default()
             .into_iter()
             .filter(|preset| preset.show_in_picker && !Self::is_auto_model(&preset.model))
@@ -231,7 +319,7 @@ impl ChatWidget {
         for preset in presets.into_iter() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
-            let is_current = preset.model.as_str() == self.current_model();
+            let is_current = self.model_is_current(&preset.model);
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -241,7 +329,7 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: preset.model.clone(),
+                name: preset.display_name.clone(),
                 description,
                 is_current,
                 is_default: preset.is_default,
@@ -265,18 +353,46 @@ impl ChatWidget {
         });
     }
 
-    fn model_selection_actions(
+    pub(super) fn model_selection_actions(
         &self,
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
     ) -> Vec<SelectionAction> {
+        let external_model = self.config.configured_external_model(&model_for_action);
+        let target_provider_id = self.config.provider_id_for_model(&model_for_action);
+        let target_provider_name = self
+            .config
+            .model_providers
+            .get(&target_provider_id)
+            .map(|provider| provider.name.trim())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&target_provider_id)
+            .to_string();
+        let provider_changed = target_provider_id != self.config.model_provider_id;
+        let runtime_model = external_model
+            .as_ref()
+            .map(|model| model.api_model.clone())
+            .unwrap_or_else(|| model_for_action.clone());
         let warning = effort_for_action
             .as_ref()
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         let thread_id = self.thread_id();
         vec![Box::new(move |tx| {
-            if model_for_action == LUNA_RESERVE_MODEL {
+            if provider_changed {
+                tx.send(AppEvent::OpenProviderSwitchConfirmation {
+                    model: model_for_action.clone(),
+                    effort: effort_for_action.clone(),
+                    provider_name: target_provider_name.clone(),
+                });
+            } else if external_model.is_some() {
+                tx.send(AppEvent::UpdateModel(runtime_model.clone()));
+                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action.clone()));
+                tx.send(AppEvent::PersistModelSelection {
+                    model: model_for_action.clone(),
+                    effort: effort_for_action.clone(),
+                });
+            } else if model_for_action == LUNA_RESERVE_MODEL {
                 // Reserve is temporary: update the active task without persisting a model default.
                 if let Some(thread_id) = thread_id {
                     tx.send(AppEvent::UpdateLunaReserveReasoning {
@@ -308,6 +424,64 @@ impl ChatWidget {
                 )));
             }
         })]
+    }
+
+    pub(crate) fn open_provider_switch_confirmation(
+        &mut self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        provider_name: String,
+    ) {
+        let selected_model = model.clone();
+        let accept_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::PersistModelSelection {
+                model: model.clone(),
+                effort: effort.clone(),
+            });
+            tx.send(AppEvent::NewSession { name: None });
+        })];
+        let items = vec![
+            SelectionItem {
+                name: "Start new task".to_string(),
+                description: Some(format!("Use {selected_model} with {provider_name}")),
+                actions: accept_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Cancel".to_string(),
+                description: Some("Keep the current task and provider".to_string()),
+                actions: Vec::new(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        let header = Paragraph::new(vec![
+            Line::from("Switch provider?".bold()),
+            Line::default(),
+            Line::from(
+                "Changing providers starts a new task without copying conversation history.",
+            ),
+        ])
+        .wrap(Wrap { trim: false });
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn model_is_current(&self, model: &str) -> bool {
+        if self.current_model() == model {
+            return true;
+        }
+        self.config
+            .configured_external_model(model)
+            .is_some_and(|external| {
+                external.provider_id == self.config.model_provider_id
+                    && external.api_model == self.current_model()
+            })
     }
 
     fn should_prompt_plan_mode_reasoning_scope(

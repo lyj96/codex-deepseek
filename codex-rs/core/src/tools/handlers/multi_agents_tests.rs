@@ -1182,6 +1182,49 @@ async fn multi_agent_v2_external_spawn_allows_full_history_across_external_provi
 }
 
 #[tokio::test]
+async fn multi_agent_v2_external_spawn_rejects_history_fork_for_ephemeral_parent() {
+    let (session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    install_qwen_provider_with_catalog(&mut turn).await;
+
+    let deepseek_provider = turn.config.model_providers["deepseek"].clone();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.ephemeral = true;
+    config.model_provider_id = "deepseek".to_string();
+    config.model_provider = deepseek_provider.clone();
+    config.model = Some("deepseek-flash".to_string());
+    turn.provider = create_model_provider(deepseek_provider, turn.auth_manager.clone());
+    set_turn_config(&mut turn, config);
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "continue from this external-provider context",
+                "task_name": "qwen_branch",
+                "model": "qwen-flash",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .err()
+        .expect("ephemeral parent history should not be forked");
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Forked subagents require persisted parent history; use `fork_turns=\"none\"` or run without `--ephemeral`."
+                .to_string(),
+        )
+    );
+}
+
+#[tokio::test]
 async fn multi_agent_v2_external_spawn_rejects_openai_history_across_providers() {
     let (mut session, mut turn) = make_session_and_context().await;
     install_deepseek_provider_with_catalog(&mut turn).await;

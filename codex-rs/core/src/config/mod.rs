@@ -114,6 +114,7 @@ use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelMessages;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::DenyReadValidator;
@@ -1110,6 +1111,15 @@ pub struct Config {
     pub otel: codex_config::types::OtelConfig,
 }
 
+/// A configured external model together with the provider route used to invoke it.
+#[derive(Clone, Debug)]
+pub struct ConfiguredExternalModel {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub api_model: String,
+    pub preset: ModelPreset,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ToolRegistryConfig {
     /// Fail the turn when multiple tools share the same effective name.
@@ -1519,6 +1529,24 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    /// Returns all valid external-provider models exposed in unified model pickers.
+    pub fn configured_external_models(&self) -> Vec<ConfiguredExternalModel> {
+        crate::agent::external_model_route::configured_external_models(self)
+    }
+
+    /// Resolves a public picker model id to its external-provider route.
+    pub fn configured_external_model(
+        &self,
+        requested_model: &str,
+    ) -> Option<ConfiguredExternalModel> {
+        crate::agent::external_model_route::configured_external_model(self, requested_model)
+    }
+
+    /// Resolves the provider that would serve a selected model.
+    pub fn provider_id_for_model(&self, requested_model: &str) -> String {
+        crate::agent::external_model_route::provider_id_for_model(self, requested_model)
+    }
+
     pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
         &self.sqlite
     }

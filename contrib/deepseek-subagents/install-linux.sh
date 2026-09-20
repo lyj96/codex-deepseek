@@ -389,10 +389,17 @@ fi
 export CODEX_CLI_PATH="$wrapper"
 export DEEPSEEK_API_KEY="$deepseek_key"
 
+removed_previous=0
+for previous_dir in "$install_dir"/previous-*; do
+  [[ -e "$previous_dir" || -L "$previous_dir" ]] || continue
+  rm -rf -- "$previous_dir"
+  removed_previous=$((removed_previous + 1))
+done
+
 echo "Installed Codex DeepSeek to: $current_dir"
 echo "CLI command: codex-dp"
 [[ "$ssh_remote" == false ]] || echo "Remote Codex command: $bin_dir/codex"
-[[ -z "$backup_dir" ]] || echo "Previous installation kept at: $backup_dir"
+[[ "$removed_previous" -eq 0 ]] || echo "Removed $removed_previous previous installation backup(s)."
 if [[ "$ssh_remote" == true ]]; then
   PATH="$bin_dir:$PATH" codex --version
   echo "Reconnect this SSH host in Codex Desktop to use the updated app server."
