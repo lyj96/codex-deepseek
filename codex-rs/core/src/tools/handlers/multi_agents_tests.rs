@@ -241,6 +241,39 @@ async fn install_deepseek_provider_with_catalog(turn: &mut TurnContext) {
     turn.config = Arc::new(config);
 }
 
+async fn install_qwen_provider_with_catalog(turn: &mut TurnContext) {
+    let catalog_dir = turn.config.codex_home.as_path().join("model-catalogs");
+    tokio::fs::create_dir_all(&catalog_dir)
+        .await
+        .expect("external model catalog directory should be created");
+
+    let mut model = turn.model_info().as_ref().clone();
+    model.slug = "qwen-flash".to_string();
+    model.display_name = "Qwen Flash".to_string();
+    model.description = Some("Fast external coding model".to_string());
+    model.supported_reasoning_levels = vec![ReasoningEffortPreset {
+        effort: ReasoningEffort::High,
+        description: "High reasoning effort".to_string(),
+    }];
+    model.default_reasoning_level = Some(ReasoningEffort::High);
+    tokio::fs::write(
+        catalog_dir.join("qwen.json"),
+        serde_json::to_vec_pretty(&ModelsResponse {
+            models: vec![model],
+        })
+        .expect("external model catalog should serialize"),
+    )
+    .await
+    .expect("external model catalog should be written");
+
+    let mut config = (*turn.config).clone();
+    config.model_providers.insert(
+        "qwen".to_string(),
+        built_in_model_providers(/* openai_base_url */ None)["ollama"].clone(),
+    );
+    turn.config = Arc::new(config);
+}
+
 async fn install_external_model_route(turn: &TurnContext, public_model: &str, api_model: &str) {
     let routes_path = turn
         .config
@@ -1076,6 +1109,118 @@ async fn multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without
     assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
     assert_eq!(snapshot.session_source.get_agent_role(), None);
     assert!(communication.encrypted_content.is_none());
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_allows_full_history_across_external_providers() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    install_qwen_provider_with_catalog(&mut turn).await;
+
+    let deepseek_provider = turn.config.model_providers["deepseek"].clone();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.model_provider_id = "deepseek".to_string();
+    config.model_provider = deepseek_provider.clone();
+    config.model = Some("deepseek-flash".to_string());
+    turn.provider = create_model_provider(deepseek_provider, turn.auth_manager.clone());
+    set_turn_config(&mut turn, config);
+
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "continue from this external-provider context",
+                "task_name": "qwen_branch",
+                "model": "qwen-flash",
+                "reasoning_effort": "high",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .expect("external providers should be able to fork history across providers");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn result should be json");
+    assert_eq!(result["task_name"], "/root/qwen_branch");
+
+    let agent_id = manager
+        .captured_ops()
+        .into_iter()
+        .find_map(|(thread_id, op)| match op {
+            Op::InterAgentCommunication { communication, .. }
+                if communication.recipient.as_str() == "/root/qwen_branch" =>
+            {
+                assert!(communication.encrypted_content.is_none());
+                Some(thread_id)
+            }
+            _ => None,
+        })
+        .expect("spawned external agent should receive a plaintext task");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "qwen-flash");
+    assert_eq!(snapshot.model_provider_id, "qwen");
+    assert_eq!(snapshot.forked_from_thread_id, Some(root.thread_id));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_rejects_openai_history_across_providers() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "deepseek_branch",
+                "model": "deepseek-flash",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .err()
+        .expect("OpenAI history should not cross providers");
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "OpenAI-backed agents require `fork_turns` to be `none` when spawning across providers because encrypted history cannot be forwarded; put the needed context in `message`."
+                .to_string(),
+        )
+    );
 }
 
 #[tokio::test]
