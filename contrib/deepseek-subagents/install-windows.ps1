@@ -170,11 +170,24 @@ bash "$tmp" --ssh-remote --release '__RELEASE_TAG__'
     $remoteCommand = $remoteCommand.Replace('__INSTALLER_URL__', $installerUrl).Replace('__RELEASE_TAG__', $ReleaseTag)
     Write-Host "Installing Codex DeepSeek on SSH host: $Name"
     if (-not [string]::IsNullOrWhiteSpace($forwardKey)) {
-        $remoteCommand = 'IFS= read -r DEEPSEEK_API_KEY; DEEPSEEK_API_KEY="$(printf ''%s'' "$DEEPSEEK_API_KEY" | tr -d ''\r'')"; export DEEPSEEK_API_KEY' + [Environment]::NewLine + $remoteCommand
-        $forwardKey | & $ssh.Source -- $Name $remoteCommand
+        $keyBytes = [Text.Encoding]::UTF8.GetBytes($forwardKey)
+        try {
+            $keyBase64 = [Convert]::ToBase64String($keyBytes)
+            $keyPrelude = "DEEPSEEK_API_KEY_B64='$keyBase64'" + "`n" +
+                'export DEEPSEEK_API_KEY="$(printf ''%s'' "$DEEPSEEK_API_KEY_B64" | base64 -d)"' + "`n" +
+                'unset DEEPSEEK_API_KEY_B64'
+            $payload = $keyPrelude + "`n" + $remoteCommand
+            $payload | & $ssh.Source -- $Name "tr -d '\r' | bash -s"
+        }
+        finally {
+            [Array]::Clear($keyBytes, 0, $keyBytes.Length)
+            $keyBase64 = $null
+            $keyPrelude = $null
+            $payload = $null
+        }
     }
     else {
-        & $ssh.Source -t -- $Name $remoteCommand
+        $remoteCommand | & $ssh.Source -- $Name "tr -d '\r' | bash -s"
     }
     if ($LASTEXITCODE -ne 0) {
         throw "Remote installation failed for SSH host: $Name"
