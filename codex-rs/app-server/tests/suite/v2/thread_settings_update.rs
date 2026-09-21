@@ -463,6 +463,88 @@ async fn thread_settings_update_routes_same_provider_public_model_to_api_model()
 }
 
 #[tokio::test]
+async fn turn_start_routes_collaboration_mode_public_model_to_api_model() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("done")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_model_provider("qwen")
+        .with_provider_name("Qwen")
+        .with_model("qwen3.8-max")
+        .with_provider_config("supports_websockets = false")
+        .write(codex_home.path())?;
+    let catalog_dir = codex_home.path().join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir)?;
+    let mut catalog = codex_models_manager::bundled_models_response()?;
+    catalog.models.truncate(1);
+    catalog.models[0].slug = "qwen3.8-max".to_string();
+    std::fs::write(
+        catalog_dir.join("qwen.json"),
+        serde_json::to_string(&catalog)?,
+    )?;
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        r#"{
+            "version": 1,
+            "models": {
+                "qwen-max": {
+                    "provider": "qwen",
+                    "api_model": "qwen3.8-max"
+                }
+            }
+        }"#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let thread = start_thread_with_model(&mut mcp, "qwen-max").await?.thread;
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "qwen-max".to_string(),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let TurnStartResponse { turn } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(turn_request_id)).await??;
+    assert!(!turn.id.is_empty());
+
+    let updated = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(updated.thread_id, thread.id);
+    assert_eq!(updated.thread_settings.model, "qwen3.8-max");
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request_bodies = received_response_bodies(&server).await?;
+    assert!(!request_bodies.is_empty());
+    assert!(
+        request_bodies
+            .iter()
+            .all(|body| body.get("model").and_then(Value::as_str) == Some("qwen3.8-max")),
+        "turn/start sent a public model alias to the provider: {request_bodies:#?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_settings_update_rejects_cross_provider_model_switch() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -524,6 +606,149 @@ wire_api = "responses"
         error.error.message,
         "switching from provider `mock_provider` to `qwen` requires starting a new thread"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_rejects_cross_provider_collaboration_mode_model() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(
+        r#"
+
+[model_providers.qwen]
+name = "Qwen"
+base_url = "https://example.com/compatible-mode/v1"
+env_key = "QWEN_API_KEY"
+wire_api = "responses"
+"#,
+    );
+    std::fs::write(config_path, config)?;
+    let catalog_dir = codex_home.path().join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir)?;
+    let mut catalog = codex_models_manager::bundled_models_response()?;
+    catalog.models.truncate(1);
+    catalog.models[0].slug = "qwen3.8-max".to_string();
+    std::fs::write(
+        catalog_dir.join("qwen.json"),
+        serde_json::to_string(&catalog)?,
+    )?;
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        r#"{
+            "version": 1,
+            "models": {
+                "qwen-max": {
+                    "provider": "qwen",
+                    "api_model": "qwen3.8-max"
+                }
+            }
+        }"#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let thread = start_thread(&mut mcp).await?.thread;
+    let request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "qwen-max".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        error.error.message,
+        "switching from provider `mock_provider` to `qwen` requires starting a new thread"
+    );
+    assert!(received_response_bodies(&server).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_rejects_builtin_model_on_external_provider_thread() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    write_models_cache(codex_home.path()).await?;
+    let (builtin_model, _) = service_tier_model_and_tier_id()?;
+    let catalog_dir = codex_home.path().join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir)?;
+    let mut catalog = codex_models_manager::bundled_models_response()?;
+    catalog.models.truncate(1);
+    catalog.models[0].slug = "mock-model".to_string();
+    std::fs::write(
+        catalog_dir.join("mock_provider.json"),
+        serde_json::to_string(&catalog)?,
+    )?;
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        r#"{
+            "version": 1,
+            "models": {
+                "mock-public": {
+                    "provider": "mock_provider",
+                    "api_model": "mock-model"
+                }
+            }
+        }"#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let thread = start_thread(&mut mcp).await?.thread;
+    let request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: builtin_model,
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        error.error.message,
+        "switching from provider `mock_provider` to `openai` requires starting a new thread"
+    );
+    assert!(received_response_bodies(&server).await?.is_empty());
     Ok(())
 }
 
