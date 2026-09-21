@@ -176,6 +176,7 @@ jobs:
         run: |
           CARGO_BUILD_JOBS=1 just test -p codex-cli --bin codex provider_cmd::tests
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::thread_settings_update
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::account::
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without_agent_type
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_uses_explicit_model_route
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_provider_tools_use_plaintext_message_schemas

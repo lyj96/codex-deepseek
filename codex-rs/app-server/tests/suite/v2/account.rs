@@ -3005,6 +3005,78 @@ async fn get_account_with_chatgpt() -> Result<()> {
     Ok(())
 }
 
+#[test_case(true; "signed_in")]
+#[test_case(false; "signed_out")]
+#[tokio::test]
+async fn managed_external_default_preserves_desktop_account(signed_in: bool) -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    let catalog_dir = codex_home.path().join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir)?;
+    let mut catalog = codex_models_manager::bundled_models_response()?;
+    catalog.models.truncate(1);
+    catalog.models[0].slug = "mock-model".to_string();
+    std::fs::write(
+        catalog_dir.join("mock_provider.json"),
+        serde_json::to_string(&catalog)?,
+    )?;
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        r#"{"version":1,"models":{"external-model":{"provider":"mock_provider","api_model":"mock-model"}}}"#,
+    )?;
+    if signed_in {
+        write_chatgpt_auth(
+            codex_home.path(),
+            ChatGptAuthFixture::new("access-chatgpt")
+                .email("user@example.com")
+                .plan_type("pro"),
+            AuthCredentialsStoreMode::File,
+        )?;
+    }
+    let auth_before = std::fs::read(codex_home.path().join("auth.json")).ok();
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    assert_eq!(
+        read_account(&mut mcp).await?,
+        GetAccountResponse {
+            account: signed_in.then(|| Account::Chatgpt {
+                email: Some("user@example.com".to_string()),
+                plan_type: AccountPlanType::Pro,
+            }),
+            requires_openai_auth: signed_in,
+        }
+    );
+    let request_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(true),
+            refresh_token: Some(false),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<GetAuthStatusResponse>(response)?,
+        GetAuthStatusResponse {
+            auth_method: signed_in.then_some(AuthMode::Chatgpt),
+            auth_token: signed_in.then(|| "access-chatgpt".to_string()),
+            requires_openai_auth: Some(signed_in),
+        }
+    );
+    assert_eq!(
+        std::fs::read(codex_home.path().join("auth.json")).ok(),
+        auth_before
+    );
+    Ok(())
+}
+
 #[test_case("self_serve_business_prolite", AccountPlanType::SelfServeBusinessProLite; "business_prolite")]
 #[test_case("edu_plus", AccountPlanType::EduPlus; "edu_plus")]
 #[test_case("edu_pro", AccountPlanType::EduPro; "edu_pro")]
