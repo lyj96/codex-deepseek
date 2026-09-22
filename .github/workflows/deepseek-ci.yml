@@ -195,6 +195,15 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
+      - name: Test real pkgconf archive extraction without MSI installation
+        shell: pwsh
+        run: |
+          $packages = Join-Path $env:RUNNER_TEMP 'pkgconf-smoke-packages'
+          New-Item -ItemType Directory -Path $packages | Out-Null
+          foreach ($architecture in @('x64', 'arm64')) {
+            Invoke-WebRequest "https://github.com/pkgconf/pkgconf/releases/download/pkgconf-3.0.6/pkgconf-$architecture-3.0.6.msi" -OutFile (Join-Path $packages "pkgconf-$architecture-3.0.6.msi")
+          }
+          ./.github/scripts/test-pkgconf-extraction.ps1 -PackageDirectory $packages
       - name: Test deferred cleanup of a locked backup
         shell: pwsh
         run: |

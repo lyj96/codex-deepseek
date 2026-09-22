@@ -19,8 +19,7 @@ if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvaria
     throw 'pkgconf installer SHA-256 mismatch'
 }
 $image = Join-Path $repository 'pkgconf-image'
-$process = Start-Process msiexec.exe -ArgumentList @('/a', "`"$installer`"", '/qn', "TARGETDIR=`"$image`"") -Wait -PassThru -WindowStyle Hidden
-if ($process.ExitCode -ne 0) { throw "pkgconf extraction failed: $($process.ExitCode)" }
+& (Join-Path $PSScriptRoot 'extract-pkgconf.ps1') -MsiPath $installer -Destination $image
 $pkgconf = @(Get-ChildItem -LiteralPath $image -Filter pkgconf.exe -Recurse)
 if ($pkgconf.Count -ne 1) { throw 'Expected exactly one native pkgconf.exe' }
 $tools = @{
