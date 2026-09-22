@@ -342,6 +342,8 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
     fi
     # Native Windows rules inspect fixed values during analysis; inherited
     # --action_env=NAME alone is not visible in default_shell_env.
+    # Git Bash normalizes this Windows environment key to uppercase.
+    SystemRoot="${SystemRoot:-${SYSTEMROOT:-}}"
     for env_var in SystemRoot PROCESSOR_ARCHITECTURE; do
       if [[ -z "${!env_var:-}" ]]; then
         echo "${env_var} must be set for native Windows Bazel CI." >&2

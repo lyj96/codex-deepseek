@@ -2,6 +2,10 @@ name: sdk
 
 on:
   workflow_call:
+    inputs:
+      run_bazel:
+        type: boolean
+        default: true
 
 jobs:
   python-sdk-installation:
@@ -34,6 +38,7 @@ jobs:
             '
 
   sdks:
+    if: ${{ inputs.run_bazel }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment:
@@ -143,7 +148,7 @@ jobs:
           uv run --only-group dev --frozen --no-sync pytest
 
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        if: always() && !cancelled()
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:

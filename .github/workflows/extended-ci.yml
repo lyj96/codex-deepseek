@@ -1,0 +1,22 @@
+name: extended-ci
+
+# Supplemental coverage, explicitly dispatched after reviewing the changed areas.
+# A failed extended run remains visible; it is never converted into success.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bazel:
+    uses: ./.github/workflows/bazel.yml
+    secrets: inherit
+  rust:
+    uses: ./.github/workflows/rust-ci.yml
+    with:
+      run_bazel: true
+    secrets: inherit
+  sdk:
+    uses: ./.github/workflows/sdk.yml
+    secrets: inherit

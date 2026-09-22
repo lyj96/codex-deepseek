@@ -8,7 +8,7 @@ import unittest
 
 
 class WindowsEnvironmentTest(unittest.TestCase):
-    def invoke(self, *, remote=False, system_root="C:/Windows"):
+    def invoke(self, *, remote=False, system_root="C:/Windows", uppercase=False):
         env = os.environ.copy()
         env.update(
             RUNNER_OS="Windows",
@@ -19,6 +19,9 @@ class WindowsEnvironmentTest(unittest.TestCase):
             VOICE_WINDOWS_BAZEL_REPOSITORY="D:/temp/voice-tools",
         )
         env.pop("BUILDBUDDY_API_KEY", None)
+        env.pop("SYSTEMROOT", None)
+        if uppercase:
+            env["SYSTEMROOT"] = env.pop("SystemRoot")
         if remote:
             env["BUILDBUDDY_API_KEY"] = "test-only-not-a-secret"
         with tempfile.TemporaryDirectory() as directory:
@@ -64,6 +67,11 @@ class WindowsEnvironmentTest(unittest.TestCase):
         result = self.invoke(system_root="")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SystemRoot must be set", result.stderr)
+
+    def test_git_bash_uppercase_system_root(self):
+        result = self.invoke(uppercase=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--action_env=SystemRoot=C:/Windows", result.stdout)
 
     def test_remote_linux_does_not_receive_windows_identity(self):
         result = self.invoke(remote=True, system_root="")
