@@ -259,7 +259,8 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUI
   # Windows cross-compilation depends on authenticated RBE. Preserve the local
   # Windows build shape when credentials are unavailable.
   ci_config=ci-windows
-  windows_msvc_host_platform=1
+  # Keep Rust proc-macros on the same GNU ABI as hermetic LLVM's C/C++
+  # dependencies. A forced MSVC host links MinGW objects with rust-lld/MSVC.
 fi
 
 post_config_bazel_args=()
@@ -333,6 +334,24 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   fi
 
   if [[ $pass_windows_build_env -eq 1 ]]; then
+    if [[ -n "${VOICE_WINDOWS_BAZEL_REPOSITORY:-}" ]]; then
+      post_config_bazel_args+=(
+        "--inject_repository=voice_windows_tools=${VOICE_WINDOWS_BAZEL_REPOSITORY}"
+        "--//third_party/voice:windows_installed_tools=@voice_windows_tools//:tools"
+      )
+    fi
+    # Native Windows rules inspect fixed values during analysis; inherited
+    # --action_env=NAME alone is not visible in default_shell_env.
+    for env_var in SystemRoot PROCESSOR_ARCHITECTURE; do
+      if [[ -z "${!env_var:-}" ]]; then
+        echo "${env_var} must be set for native Windows Bazel CI." >&2
+        exit 1
+      fi
+      post_config_bazel_args+=(
+        "--action_env=${env_var}=${!env_var}"
+        "--host_action_env=${env_var}=${!env_var}"
+      )
+    done
     windows_action_env_vars=(
       INCLUDE
       LIB

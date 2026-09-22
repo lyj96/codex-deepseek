@@ -32,6 +32,22 @@ runs:
         # BAZEL_OUTPUT_USER_ROOT and leaves Bazel's I/O-heavy trees on C:.
         output-base: ${{ steps.setup_ci.outputs.bazel-output-base }}
 
+    - name: Provision public Cygwin voice build tools
+      if: runner.os == 'Windows' && runner.environment == 'github-hosted'
+      uses: cygwin/cygwin-install-action@a3d72946b163026bbd0fa9a88379ccbda4bd86bb
+      with:
+        install-dir: '${{ runner.temp }}\voice-windows-tools\cygwin'
+        packages: bash make automake autoconf libtool patch diffutils perl tar gzip xz unzip
+        add-to-path: false
+        check-sig: true
+        check-hash: true
+        check-installer-sig: true
+
+    - name: Prepare declared Windows voice tool repository
+      if: runner.os == 'Windows' && runner.environment == 'github-hosted'
+      shell: pwsh
+      run: ./.github/scripts/prepare-windows-voice-tools.ps1
+
     - name: Configure Bazel repository cache
       id: configure_bazel_repository_cache
       shell: pwsh
