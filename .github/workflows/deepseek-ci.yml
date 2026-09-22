@@ -20,6 +20,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
+      - name: Check free standard runner policy
+        run: |
+          python3 .github/scripts/test_free_runners.py
+          python3 .github/scripts/check-free-runners.py
       - name: Validate shell installers
         run: |
           bash -n contrib/deepseek-subagents/install-linux.sh
