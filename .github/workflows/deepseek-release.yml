@@ -29,6 +29,11 @@ env:
   CARGO_PROFILE_RELEASE_STRIP: "symbols"
 
 jobs:
+  validation:
+    needs: version
+    if: needs.version.outputs.npm_only != 'true'
+    uses: ./.github/workflows/blocking-ci.yml
+
   version:
     runs-on: ubuntu-24.04
     outputs:
@@ -234,6 +239,7 @@ jobs:
 
   release:
     needs:
+      - validation
       - version
       - build
     if: >-

@@ -13,6 +13,7 @@ use codex_login::login_with_bedrock_access_keys;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
 mod bedrock_setup;
+mod desktop_identity;
 mod rate_limit_resets;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
@@ -1038,11 +1039,11 @@ impl AccountRequestProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        // Determine whether auth is required based on the active model provider.
-        // If a custom provider is configured with `requires_openai_auth == false`,
-        // then no auth step is required; otherwise, default to requiring auth.
+        // Desktop account identity must survive selecting a managed external model.
+        // External inference still uses the configured provider's own credentials.
         let config = self.load_latest_config().await;
-        let requires_openai_auth = config.model_provider.requires_openai_auth;
+        let requires_openai_auth =
+            desktop_identity::account_provider(&config, &self.auth_manager).requires_openai_auth;
 
         let response = if !requires_openai_auth {
             GetAuthStatusResponse {
@@ -1112,8 +1113,10 @@ impl AccountRequestProcessor {
         self.refresh_token_if_requested(do_refresh).await;
 
         let config = self.load_latest_config().await;
-        let provider =
-            create_model_provider(config.model_provider, Some(self.auth_manager.clone()));
+        let provider = create_model_provider(
+            desktop_identity::account_provider(&config, &self.auth_manager),
+            Some(self.auth_manager.clone()),
+        );
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,
             Err(err) => return Err(invalid_request(err.to_string())),

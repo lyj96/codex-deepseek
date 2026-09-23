@@ -4,9 +4,7 @@ on:
   push:
     branches:
       - deepseek
-  pull_request:
-    branches:
-      - deepseek
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -15,11 +13,17 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
+      - name: Check free standard runner policy
+        run: |
+          python3 .github/scripts/test_free_runners.py
+          python3 .github/scripts/check-free-runners.py
+          python3 .github/scripts/test_run_bazel_ci_environment.py
+          python3 .github/scripts/test_ci_results.py
       - name: Validate shell installers
         run: |
           bash -n contrib/deepseek-subagents/install-linux.sh
@@ -176,6 +180,11 @@ jobs:
         run: |
           CARGO_BUILD_JOBS=1 just test -p codex-cli --bin codex provider_cmd::tests
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::thread_settings_update
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::account::
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::model_list
+          CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent
+          CARGO_BUILD_JOBS=1 just test -p codex-core --lib provider
+          CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent::control
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without_agent_type
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_uses_explicit_model_route
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_provider_tools_use_plaintext_message_schemas
@@ -189,6 +198,15 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
+      - name: Test real pkgconf archive extraction without MSI installation
+        shell: pwsh
+        run: |
+          $packages = Join-Path $env:RUNNER_TEMP 'pkgconf-smoke-packages'
+          New-Item -ItemType Directory -Path $packages | Out-Null
+          foreach ($architecture in @('x64', 'arm64')) {
+            Invoke-WebRequest "https://github.com/pkgconf/pkgconf/releases/download/pkgconf-3.0.6/pkgconf-$architecture-3.0.6.msi" -OutFile (Join-Path $packages "pkgconf-$architecture-3.0.6.msi")
+          }
+          ./.github/scripts/test-pkgconf-extraction.ps1 -PackageDirectory $packages
       - name: Test deferred cleanup of a locked backup
         shell: pwsh
         run: |
