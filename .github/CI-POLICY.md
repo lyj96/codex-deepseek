@@ -4,12 +4,21 @@ The fork ships Cargo-built Windows x86_64 MSVC, macOS arm64 and Linux x86_64
 musl packages. `blocking-ci` is the automatic PR gate. It retains formatting,
 dependency policy, repository checks, Python SDK installation, provider-manager
 and installer/npm tests, App Server account/model/settings tests, and Cargo
-multi-agent/provider/agent-control regressions. Skipped or failed required
-workflows are not accepted by the final gate.
+multi-agent/provider/agent-control regressions. A Windows MSVC compile check
+also covers the release binaries to catch platform-only Rust errors before
+release. Skipped or failed required workflows are not accepted by the final gate.
 
 Native releases run that same gate on the tagged revision. Publishing requires
 both validation and all three Cargo package builds (including executable version
 smoke tests). npm-only wrapper hotfixes keep their no-Rust-build path.
+
+Before creating a native release tag, verify the exact candidate revision locally
+with the pinned Rust toolchain: compile the Windows MSVC release entrypoints,
+link and launch `codex.exe`, and compile plus launch the CLI under WSL/Linux.
+Use the checksum-verified V8 artifacts, not the crate's unsupported default
+download URL. The latest PR revision must also pass `blocking-ci`. If either
+platform preflight or the PR gate fails, fix it before tagging; a release build
+must not be used as the first platform-specific compilation test.
 
 `extended-ci` is manually dispatched on a reviewed ref. It preserves the full
 Bazel matrix, Clippy, SDK integration tests and argument-comment lint. These
