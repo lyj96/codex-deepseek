@@ -251,3 +251,35 @@ jobs:
           if (Test-Path -LiteralPath $cleanupTarget) {
             throw "Windows deferred cleanup helper did not remove the backup directory."
           }
+
+  windows-release-compile:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+        with:
+          toolchain: 1.95.0
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-msvc-env
+        with:
+          target: x86_64-pc-windows-msvc
+      - name: Check Windows release binaries
+        working-directory: codex-rs
+        env:
+          LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+        run: >-
+          cargo check --locked --target x86_64-pc-windows-msvc
+          --bin codex --bin codex-app-server --bin codex-code-mode-host
+          --bin codex-command-runner --bin codex-windows-sandbox-setup
