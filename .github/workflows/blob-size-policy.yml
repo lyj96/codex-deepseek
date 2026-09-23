@@ -21,6 +21,8 @@ jobs:
       - name: Determine comparison range
         id: range
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -29,6 +31,23 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base='${{ github.event.pull_request.base.sha }}'
             head='${{ github.event.pull_request.head.sha }}'
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            head='${{ github.sha }}'
+            # Tag pushes have an all-zero `before` SHA. A prior tag may have
+            # failed publication, so compare against the latest published release.
+            base=''
+            while IFS= read -r candidate; do
+              if git merge-base --is-ancestor "$candidate" "$head"; then
+                base="$candidate"
+                break
+              fi
+            done < <(gh release list --repo '${{ github.repository }}' \
+              --limit 100 --json tagName,isDraft \
+              --jq '.[] | select(.isDraft | not) | .tagName')
+            if [[ -z "$base" ]]; then
+              echo 'No published ancestor release found for tag comparison' >&2
+              exit 1
+            fi
           else
             base='${{ github.event.before }}'
             head='${{ github.sha }}'

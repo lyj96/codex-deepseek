@@ -15,6 +15,8 @@ smoke tests). npm-only wrapper hotfixes keep their no-Rust-build path.
 Bazel matrix, Clippy, SDK integration tests and argument-comment lint. These
 are supplemental signals, not prerequisites for ordinary Cargo releases.
 Failures remain failures; they are not relabeled successful.
+The upstream V8 canary matrix is also manual on this fork; it is not started
+automatically by a PR.
 
 ## Coverage not equivalent to the upstream suite
 
