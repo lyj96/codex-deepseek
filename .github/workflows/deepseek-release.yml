@@ -214,6 +214,7 @@ jobs:
               --release \
               --bin bwrap
             bwrap="codex-rs/target/$TARGET/release/bwrap"
+            "$bwrap" --version
             export CODEX_BWRAP_SHA256="$(sha256sum "$bwrap" | awk '{print $1}')"
             args+=(--bwrap-bin "$bwrap")
           fi
