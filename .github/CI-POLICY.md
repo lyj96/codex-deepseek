@@ -6,7 +6,9 @@ dependency policy, repository checks, Python SDK installation, provider-manager
 and installer/npm tests, App Server account/model/settings tests, and Cargo
 multi-agent/provider/agent-control regressions. Windows MSVC and Apple Silicon
 macOS compile checks cover the release binaries to catch platform-only Rust
-errors before release. Skipped or failed required workflows are not accepted by
+errors before release. The Linux musl preflight also links and launches the
+vendored bubblewrap binary, catching linker/runtime faults that `cargo check`
+cannot detect. Skipped or failed required workflows are not accepted by
 the final gate.
 
 Native releases run that same gate on the tagged revision. Publishing requires
