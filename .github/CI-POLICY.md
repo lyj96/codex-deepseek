@@ -4,9 +4,10 @@ The fork ships Cargo-built Windows x86_64 MSVC, macOS arm64 and Linux x86_64
 musl packages. `blocking-ci` is the automatic PR gate. It retains formatting,
 dependency policy, repository checks, Python SDK installation, provider-manager
 and installer/npm tests, App Server account/model/settings tests, and Cargo
-multi-agent/provider/agent-control regressions. A Windows MSVC compile check
-also covers the release binaries to catch platform-only Rust errors before
-release. Skipped or failed required workflows are not accepted by the final gate.
+multi-agent/provider/agent-control regressions. Windows MSVC and Apple Silicon
+macOS compile checks cover the release binaries to catch platform-only Rust
+errors before release. Skipped or failed required workflows are not accepted by
+the final gate.
 
 Native releases run that same gate on the tagged revision. Publishing requires
 both validation and all three Cargo package builds (including executable version
