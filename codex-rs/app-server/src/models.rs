@@ -1,25 +1,16 @@
-use std::sync::Arc;
-
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelServiceTier;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
-use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_http_client::HttpClientFactory;
-use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
-pub async fn supported_models(
-    thread_manager: Arc<ThreadManager>,
+pub fn supported_models(
+    mut presets: Vec<ModelPreset>,
     config: &Config,
     include_hidden: bool,
-    http_client_factory: HttpClientFactory,
 ) -> Vec<Model> {
-    let mut presets = thread_manager
-        .list_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
-        .await;
     if !config.model_provider.is_openai() {
         for preset in &mut presets {
             preset.is_default = false;
@@ -79,6 +70,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
             })
             .collect(),
         default_service_tier: preset.default_service_tier,
+        available_access_programs: preset.available_access_programs.map(Into::into),
         is_default: preset.is_default,
     }
 }
