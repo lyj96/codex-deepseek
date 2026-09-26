@@ -6,6 +6,8 @@
 use super::analytics::ToolCallAnalytics;
 use super::*;
 use crate::TurnStartOptions;
+use crate::agent::api::AgentControl;
+use crate::agent::api::AgentInfo;
 use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;
 use crate::agent::api::SendRequest;
@@ -84,17 +86,20 @@ pub(super) async fn handle_message_string_tool(
         )
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-    let receiver_provider_id = session
+    let receiver_info = session
         .services
         .agent_control
-        .get_agent_config_snapshot(receiver_thread_id)
+        .inspect(session.thread_id, AgentTarget::Id(receiver_thread_id))
         .await
-        .map(|snapshot| snapshot.model_provider_id)
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(
+        .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+    let receiver_provider_id = match receiver_info {
+        AgentInfo::Loaded { config, .. } => config.model_provider_id,
+        AgentInfo::Unloaded(_) => {
+            return Err(FunctionCallError::RespondToModel(
                 "target agent provider is unavailable after loading".to_string(),
-            )
-        })?;
+            ));
+        }
+    };
     let allow_openai_encrypted_content = turn.config.model_provider_id
         == codex_model_provider_info::OPENAI_PROVIDER_ID
         && receiver_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID;

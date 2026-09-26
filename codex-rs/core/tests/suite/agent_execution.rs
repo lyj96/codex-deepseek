@@ -59,7 +59,7 @@ async fn mount_root_collaboration_call(
     call_id: &'static str,
     tool_name: &'static str,
     arguments: serde_json::Value,
-) {
+) -> ResponseMock {
     let response_id = format!("resp-{call_id}");
     mount_sse_once_match(
         server,
@@ -87,7 +87,7 @@ async fn mount_root_collaboration_call(
             ev_completed(&completion_id),
         ]),
     )
-    .await;
+    .await
 }
 
 async fn mount_completed_worker(
@@ -689,3 +689,6 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
 
     Ok(())
 }
+
+#[path = "agent_eviction_tests.rs"]
+mod eviction_tests;
