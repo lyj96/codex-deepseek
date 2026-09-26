@@ -7,7 +7,7 @@ expression: "render_bottom_popup(&chat, 80)"
   Choose a provider, then select one of its models.
 
 
-› 1. OpenAI (current)  9 models
+› 1. OpenAI (current)  11 models
   2. Qwen              1 model
 
   enter select · esc back
