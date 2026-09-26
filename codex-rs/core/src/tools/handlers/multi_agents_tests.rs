@@ -1141,6 +1141,74 @@ async fn multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without
 }
 
 #[tokio::test]
+async fn multi_agent_v2_external_spawn_send_message_uses_plaintext() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "boot external worker",
+                "task_name": "external_worker",
+                "model": "deepseek-flash",
+                "fork_turns": "none"
+            })),
+        ))
+        .await
+        .expect("external worker should spawn");
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "external_worker")
+        .await
+        .expect("external worker should resolve");
+
+    SendMessageHandlerV2
+        .handle(invocation(
+            session,
+            turn,
+            "send_message",
+            function_payload(json!({
+                "target": "external_worker",
+                "message": "check the next file"
+            })),
+        ))
+        .await
+        .expect("send_message should reach the external worker");
+
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == child_thread_id
+            && matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.author == AgentPath::root()
+                        && communication.recipient.as_str() == "/root/external_worker"
+                        && communication.encrypted_content.is_none()
+                        && communication.content.ends_with("Payload:\ncheck the next file")
+                        && !communication.trigger_turn
+            )
+    }));
+}
+
+#[tokio::test]
 async fn multi_agent_v2_external_spawn_allows_full_history_across_external_providers() {
     let (mut session, mut turn) = make_session_and_context().await;
     install_deepseek_provider_with_catalog(&mut turn).await;

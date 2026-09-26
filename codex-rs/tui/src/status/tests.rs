@@ -186,6 +186,10 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
+    // Bazel snapshots use 0.0.0, while Cargo builds embed the package version.
+    let current_version = format!("(v{})", env!("CARGO_PKG_VERSION"));
+    let snapshot_version = "(v0.0.0)";
+    let version_padding = current_version.len().saturating_sub(snapshot_version.len());
     let frame_width = lines
         .iter()
         .find(|line| line.starts_with('╭'))
@@ -193,6 +197,15 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
         .map(|line| {
+            let line = if let Some((prefix, suffix)) = line.split_once(&current_version) {
+                let mut normalized = format!("{prefix}{snapshot_version}{suffix}");
+                if let Some(pipe_idx) = normalized.rfind('│') {
+                    normalized.insert_str(pipe_idx, &" ".repeat(version_padding));
+                }
+                normalized
+            } else {
+                line
+            };
             if let (Some(frame_width), Some(dir_pos), Some(pipe_idx)) =
                 (frame_width, line.find("Directory: "), line.rfind('│'))
             {
