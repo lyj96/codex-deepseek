@@ -6,15 +6,12 @@
 use super::analytics::ToolCallAnalytics;
 use super::*;
 use crate::TurnStartOptions;
-use crate::agent::api::AgentControl;
-use crate::agent::api::AgentInfo;
 use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;
 use crate::agent::api::SendRequest;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::types::MessageDeliveryMode;
 use crate::tools::context::FunctionToolOutput;
-use codex_protocol::AgentPath;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,48 +58,10 @@ pub(super) async fn handle_message_string_tool(
     analytics.set_receiver(receiver_thread_id);
     let resume_config =
         build_agent_resume_config(&turn).map_err(FunctionCallError::RespondToModel)?;
-    let receiver_agent = session
-        .services
-        .agent_control
-        .ensure_agent_known(receiver_thread_id)
-        .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-    if mode == MessageDeliveryMode::TriggerTurn
-        && receiver_agent
-            .agent_path
-            .as_ref()
-            .is_some_and(AgentPath::is_root)
-    {
-        return Err(FunctionCallError::RespondToModel(
-            "Follow-up tasks can't target the root agent".to_string(),
-        ));
-    }
-    session
-        .services
-        .agent_control
-        .ensure_v2_agent_loaded(
-            resume_config.clone(),
-            receiver_thread_id,
-            /*parent*/ None,
-        )
-        .await
-        .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-    let receiver_info = session
-        .services
-        .agent_control
-        .inspect(session.thread_id, AgentTarget::Id(receiver_thread_id))
-        .await
-        .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-    let receiver_provider_id = match receiver_info {
-        AgentInfo::Loaded { config, .. } => config.model_provider_id,
-        AgentInfo::Unloaded(_) => {
-            return Err(FunctionCallError::RespondToModel(
-                "target agent provider is unavailable after loading".to_string(),
-            ));
-        }
-    };
-    let allow_openai_encrypted_content = turn.config.model_provider_id
-        == codex_model_provider_info::OPENAI_PROVIDER_ID
-        && receiver_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID;
+    // The controller owns recipient loading and can enforce the encryption
+    // boundary against the recipient's effective provider before delivery.
+    let allow_openai_encrypted_content =
+        turn.config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID;
     let receipt = session
         .services
         .agent_control
