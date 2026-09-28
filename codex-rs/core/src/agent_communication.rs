@@ -126,7 +126,7 @@ mod tests {
             Vec::new(),
             "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\ninspect"
                 .to_string(),
-            true,
+            /*trigger_turn*/ true,
         )
     }
 

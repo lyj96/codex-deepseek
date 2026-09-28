@@ -409,7 +409,7 @@ async fn add_provider(codex_home: &Path, args: AddProviderArgs) -> anyhow::Resul
     let interactive = args.id.is_none();
     let id = match args.id {
         Some(id) => id,
-        None => prompt_required("Provider id", None)?,
+        None => prompt_required("Provider id", /*default*/ None)?,
     };
     validate_provider_id(&id)?;
     if registry.providers.contains_key(&id) {
@@ -433,7 +433,7 @@ async fn add_provider(codex_home: &Path, args: AddProviderArgs) -> anyhow::Resul
     let mut models = parse_model_pairs(&args.models)?;
     if interactive && models.is_empty() {
         loop {
-            let public_id = prompt("Public model id (blank to finish)", None)?;
+            let public_id = prompt("Public model id (blank to finish)", /*default*/ None)?;
             if public_id.is_empty() {
                 break;
             }
@@ -441,7 +441,7 @@ async fn add_provider(codex_home: &Path, args: AddProviderArgs) -> anyhow::Resul
             let mut model = default_model(public_id, api_model);
             let reasoning_efforts = prompt(
                 "Supported reasoning efforts, comma-separated (blank for none)",
-                None,
+                /*default*/ None,
             )?;
             if !reasoning_efforts.is_empty() {
                 model.reasoning_efforts = reasoning_efforts
@@ -450,7 +450,10 @@ async fn add_provider(codex_home: &Path, args: AddProviderArgs) -> anyhow::Resul
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned)
                     .collect();
-                let default_effort = prompt("Default reasoning effort (blank for none)", None)?;
+                let default_effort = prompt(
+                    "Default reasoning effort (blank for none)",
+                    /*default*/ None,
+                )?;
                 if !default_effort.is_empty() {
                     model.default_reasoning_effort = Some(default_effort);
                 }
@@ -564,7 +567,7 @@ async fn run_model(codex_home: &Path, cli: ModelCli) -> anyhow::Result<()> {
                 args.options,
                 /*existing*/ None,
             )?;
-            ensure_public_model_id_available(&registry, &model.id, None)?;
+            ensure_public_model_id_available(&registry, &model.id, /*except_provider*/ None)?;
             let provider = registry
                 .providers
                 .get_mut(&args.provider)

@@ -258,7 +258,7 @@ async fn install_deepseek_provider_with_catalog(turn: &mut TurnContext) {
     let mut config = (*turn.config).clone();
     config.model_providers.insert(
         "deepseek".to_string(),
-        built_in_model_providers(/* openai_base_url */ None)["ollama"].clone(),
+        built_in_model_providers(/*openai_base_url*/ None)["ollama"].clone(),
     );
     turn.config = Arc::new(config);
 }
@@ -291,7 +291,7 @@ async fn install_qwen_provider_with_catalog(turn: &mut TurnContext) {
     let mut config = (*turn.config).clone();
     config.model_providers.insert(
         "qwen".to_string(),
-        built_in_model_providers(/* openai_base_url */ None)["ollama"].clone(),
+        built_in_model_providers(/*openai_base_url*/ None)["ollama"].clone(),
     );
     turn.config = Arc::new(config);
 }
