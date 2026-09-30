@@ -616,6 +616,7 @@ async fn on_event_updates_status_from_turn_aborted() {
         turn_id: Some("turn-1".to_string()),
         started_at: None,
         reason: TurnAbortReason::Interrupted,
+        error: None,
         completed_at: None,
         duration_ms: None,
     }));
@@ -1976,6 +1977,7 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
         previous_turn_settings: Some(codex_history::PreviousTurnSettings {
             model: "parent-model".into(),
             comp_hash: None,
+            cyber_access_program: None,
             realtime_active: None,
         }),
     };
@@ -2688,7 +2690,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 ),
                 retained_context: Some(retained_context),
                 guardian_history: Some(codex_history::GuardianHistoryCheckpoint(vec![
-                    user_message("Parent-local approval must not be inherited."),
+                    user_message("Parent-local approval must not be inherited.").into(),
                 ])),
                 mcp_resource_origins: None,
                 window_number: None,
@@ -3062,6 +3064,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
                     previous_turn_settings: Some(codex_history::PreviousTurnSettings {
                         model: "parent-model".into(),
                         comp_hash: None,
+                        cyber_access_program: None,
                         realtime_active: None,
                     }),
                 }),
