@@ -16,8 +16,21 @@ use tokio::net::TcpListener;
 #[tokio::test]
 async fn security_setup_does_not_fetch_for_external_provider() -> Result<()> {
     let (mut app, _events, _ops) = make_test_app_with_channels().await;
-    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     app.config.model_provider_id = "deepseek".to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?;
+    let daemon = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        serve_reconnect_requests(tokio_tungstenite::accept_async(stream).await?, |request| {
+            assert_ne!(request.method, "getAuthStatus");
+            std::future::ready(Some(json!({"result": {}})))
+        })
+        .await
+    });
+    let server = AppServerSession::new(
+        crate::connect_remote_app_server(endpoint).await?,
+        ThreadParamsMode::Embedded,
+    );
     let (tx, mut events) = mpsc::unbounded_channel();
 
     crate::security_setup::prefetch(
@@ -33,7 +46,10 @@ async fn security_setup_does_not_fetch_for_external_provider() -> Result<()> {
             .await?
             .is_none()
     );
+    drop(app);
     server.shutdown().await?;
+    let methods = daemon.await??;
+    assert!(!methods.iter().any(|method| method == "getAuthStatus"));
     Ok(())
 }
 
