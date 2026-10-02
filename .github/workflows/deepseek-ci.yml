@@ -182,6 +182,7 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::thread_settings_update
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::account::
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::model_list
+          CARGO_BUILD_JOBS=1 just test -p codex-models-manager --lib openai_manager_prefers_config_catalog_over_remote_catalog
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib provider
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent::control
@@ -190,6 +191,7 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_provider_tools_use_plaintext_message_schemas
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all spawn_inherits_first_pending_owner_configuration
 
   windows-installer:
     runs-on: windows-2025
