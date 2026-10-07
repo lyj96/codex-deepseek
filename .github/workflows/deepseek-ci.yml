@@ -183,6 +183,7 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::account::
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::model_list
           CARGO_BUILD_JOBS=1 just test -p codex-models-manager --lib openai_manager_prefers_config_catalog_over_remote_catalog
+          CARGO_BUILD_JOBS=1 just test -p codex-model-provider --lib
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib model_catalog
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::spawn_agent_description
