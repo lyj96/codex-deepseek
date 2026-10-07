@@ -185,6 +185,8 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-models-manager --lib openai_manager_prefers_config_catalog_over_remote_catalog
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib model_catalog
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::spawn_agent_description
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all model_catalog_refresh_preserves_tools_and_history
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib provider
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent::control
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without_agent_type
