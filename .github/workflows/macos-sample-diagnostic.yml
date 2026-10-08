@@ -1,0 +1,94 @@
+name: macos-sample-diagnostic
+
+# One reviewed diagnostic branch; this is not a release or a replacement gate.
+on:
+  push:
+    branches: [codex/diagnose-rust-v0.161.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-sample-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sample:
+    name: macOS stable sample release-shape build
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      AUDITED_SOURCE_SHA: 14fed7dccf3222a23cfc22f58d44ccc1750b54f5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify audited source and available disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code "${AUDITED_SOURCE_SHA}" -- . \
+            ':(exclude).github/workflows/macos-sample-diagnostic.yml'
+          git rev-parse HEAD
+          df -h .
+          available_kib="$(df -Pk . | awk 'NR == 2 {print $4}')"
+          if (( available_kib < 8 * 1024 * 1024 )); then
+            echo '::error::Insufficient disk for the isolated sample diagnostic'
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/macos-sample-diagnostic"
+
+      - name: Prepare Bazel CI
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: aarch64-apple-darwin
+          cache-scope: bazel-verify-release-build
+
+      - name: Compile only the sample with release-shape flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            -- \
+            build \
+            --compilation_mode=fastbuild \
+            --jobs=3 \
+            --@rules_rust//rust/settings:extra_rustc_flag=-Cdebug-assertions=no \
+            --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebug-assertions=no \
+            --build_metadata=COMMIT_SHA=${AUDITED_SOURCE_SHA} \
+            --build_metadata=TAG_job=macos-sample-diagnostic \
+            -- \
+            //codex-rs/thread-manager-sample:codex-thread-manager-sample \
+            2>&1 | tee "${RUNNER_TEMP}/macos-sample-diagnostic/build.log"
+
+      - name: Start sample help without login or API calls
+        shell: bash
+        env:
+          CODEX_HOME: ${{ runner.temp }}/sample-empty-codex-home
+        run: |
+          set -euo pipefail
+          bazel-bin/codex-rs/thread-manager-sample/codex-thread-manager-sample \
+            --help | tee "${RUNNER_TEMP}/macos-sample-diagnostic/help.log"
+
+      - name: Record final disk usage
+        if: always()
+        shell: bash
+        run: df -h .
+
+      - name: Preserve diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: macos-sample-diagnostic
+          path: |
+            ${{ runner.temp }}/macos-sample-diagnostic
+            ${{ runner.temp }}/bazel-execution-logs
+          if-no-files-found: warn
+
+      - name: Check for a clean worktree
+        if: always()
+        uses: ./.github/actions/check-clean-worktree
