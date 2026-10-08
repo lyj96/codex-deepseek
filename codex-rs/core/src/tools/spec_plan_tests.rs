@@ -21,6 +21,7 @@ use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -2911,13 +2912,23 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
     }
 }
 
+#[test_case::test_case(false; "inline_catalog")]
+#[test_case::test_case(true; "context_catalog")]
 #[tokio::test]
-async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas() {
+async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
+    model_catalog_in_context: bool,
+) {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        set_feature(
+            turn,
+            Feature::ModelCatalogInContext,
+            model_catalog_in_context,
+        );
         let mut external_model = turn.model_info().as_ref().clone();
         external_model.slug = "deepseek-test".to_string();
         external_model.display_name = "DeepSeek Test".to_string();
+        external_model.visibility = ModelVisibility::List;
         let catalog_dir = turn.config.codex_home.join("model-catalogs");
         std::fs::create_dir_all(&catalog_dir).expect("create external model catalog directory");
         std::fs::write(
@@ -2958,6 +2969,12 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas() 
         assert!(tool.description.contains("external model provider"));
         assert!(tool.description.contains("redacted from tool logs"));
         if tool_name == SPAWN_EXTERNAL_AGENT_TOOL_NAME {
+            assert!(
+                tool.description.contains("`deepseek-test`"),
+                "configured external model missing from tool description: {}",
+                tool.description
+            );
+            assert!(!tool.description.contains("latest <model_catalog> listing"));
             assert!(
                 tool.description
                     .contains("across configured external providers")

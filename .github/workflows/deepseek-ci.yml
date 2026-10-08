@@ -183,7 +183,11 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::account::
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::model_list
           CARGO_BUILD_JOBS=1 just test -p codex-models-manager --lib openai_manager_prefers_config_catalog_over_remote_catalog
+          CARGO_BUILD_JOBS=1 just test -p codex-model-provider --lib
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent
+          CARGO_BUILD_JOBS=1 just test -p codex-core --lib model_catalog
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::spawn_agent_description
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all model_catalog_refresh_preserves_tools_and_history
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib provider
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent::control
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without_agent_type
@@ -192,6 +196,7 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all spawn_inherits_first_pending_owner_configuration
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all tree_shutdown
 
   windows-installer:
     runs-on: windows-2025

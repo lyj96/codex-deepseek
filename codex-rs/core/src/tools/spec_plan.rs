@@ -1335,6 +1335,10 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     .multi_agent_v2
                     .expose_spawn_agent_model_overrides,
                 multi_agent_version: turn_context.multi_agent_version,
+                model_catalog_in_context: turn_context
+                    .config
+                    .features
+                    .enabled(Feature::ModelCatalogInContext),
                 usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
             };
             registry.register_trusted_with_exposure(
@@ -1344,7 +1348,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         spawn_agent_description.map(str::to_owned),
                     ),
                     tool_namespace,
-                    // Spawn composes the selected description with runtime model and usage guidance.
+                    // Spawn composes the selected description with inheritance and usage guidance.
                     /*description_override*/
                     None,
                     model_messages.multi_agent_tool_parameters_override("spawn_agent"),
@@ -1407,6 +1411,8 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 external_spawn_options.available_models = external_models;
                 external_spawn_options.max_model_overrides =
                     MAX_EXTERNAL_SPAWN_AGENT_MODEL_OVERRIDES;
+                // The context catalog lists session models, not cross-provider routes.
+                external_spawn_options.model_catalog_in_context = false;
                 registry.register_trusted_with_exposure(
                     plaintext_external_agent_handler(
                         SpawnAgentHandlerV2::new(
@@ -1447,11 +1453,15 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
                     max_model_overrides: MAX_SPAWN_AGENT_MODEL_OVERRIDES,
+                    multi_agent_version: turn_context.multi_agent_version,
+                    model_catalog_in_context: turn_context
+                        .config
+                        .features
+                        .enabled(Feature::ModelCatalogInContext),
                     agent_type_description,
                     expose_agent_type: !turn_context.config.agent_roles.is_empty(),
                     hide_agent_type_model_reasoning: false,
                     expose_spawn_agent_model_overrides: true,
-                    multi_agent_version: turn_context.multi_agent_version,
                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
                 }),
                 exposure,
