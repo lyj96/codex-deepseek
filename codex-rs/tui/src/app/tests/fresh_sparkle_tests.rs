@@ -11,6 +11,8 @@ use pretty_assertions::assert_eq;
 fn started(model: &str) -> AppServerStartedThread {
     let mut session = test_thread_session(ThreadId::new(), test_path_buf("/tmp/project"));
     session.model = model.into();
+    // These picker fixtures use OpenAI models, not the generic helper's test provider.
+    session.model_provider_id = codex_model_provider_info::OPENAI_PROVIDER_ID.to_string();
     AppServerStartedThread {
         session,
         turns: Vec::new(),

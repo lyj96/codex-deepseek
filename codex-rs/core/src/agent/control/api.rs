@@ -30,6 +30,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::ThreadTraceContext;
+use codex_thread_store::ReadThreadParams;
 use futures::future::BoxFuture;
 use std::collections::HashSet;
 
@@ -137,26 +138,39 @@ impl AgentControl for LocalAgentControl {
                             "target agent is missing an agent_path".to_string(),
                         )
                     })?;
-                    self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
-                        .await?;
+                    // Cold-restored children still reload lazily on any message. Only
+                    // locally evicted recipients can retain mail without reloading.
+                    // Loaded recipients go straight to delivery, which rejects sends
+                    // racing an in-progress eviction when it acquires the residency pin.
+                    if mode == MessageDeliveryMode::TriggerTurn
+                        || (self.runtime.upgrade()?.get_thread(target).await.is_err()
+                            && self.runtime.registry.evicted_environments(target).is_none())
+                    {
+                        self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
+                            .await?;
+                    }
                     if matches!(message, AgentMessage::Encrypted(_)) {
-                        match self.inspect_agent(target).await? {
-                            AgentInfo::Loaded { config, .. }
-                                if config.model_provider_id
-                                    != codex_model_provider_info::OPENAI_PROVIDER_ID =>
-                            {
-                                return Err(CodexErr::UnsupportedOperation(
-                                    "OpenAI encrypted agent messages cannot be sent to an external provider; use send_external_message or followup_external_task with plaintext"
-                                        .to_string(),
-                                ));
-                            }
+                        // Reading durable provider metadata must not reload an evicted child
+                        // just to queue mail. Fail closed if the recipient cannot be inspected.
+                        let provider_id = match self.inspect_agent(target).await? {
+                            AgentInfo::Loaded { config, .. } => config.model_provider_id,
                             AgentInfo::Unloaded(_) => {
-                                return Err(CodexErr::UnsupportedOperation(
-                                    "target agent provider is unavailable after loading"
-                                        .to_string(),
-                                ));
+                                self.runtime
+                                    .upgrade()?
+                                    .read_stored_thread(ReadThreadParams {
+                                        thread_id: target,
+                                        include_archived: true,
+                                        include_history: false,
+                                    })
+                                    .await?
+                                    .model_provider
                             }
-                            AgentInfo::Loaded { .. } => {}
+                        };
+                        if provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID {
+                            return Err(CodexErr::UnsupportedOperation(
+                                "OpenAI encrypted agent messages cannot be sent to an external provider; use send_external_message or followup_external_task with plaintext"
+                                    .to_string(),
+                            ));
                         }
                     }
                     let communication = message.into_communication(author, receiver_path, mode);
@@ -184,6 +198,17 @@ impl AgentControl for LocalAgentControl {
                 submission_id,
             })
         })
+    }
+
+    fn take_mailbox(
+        &self,
+        agent: ThreadId,
+    ) -> Vec<codex_protocol::protocol::InterAgentCommunication> {
+        self.runtime.mailboxes.take(agent)
+    }
+
+    fn watch_mailbox(&self, agent: ThreadId) -> tokio::sync::watch::Receiver<bool> {
+        self.runtime.mailboxes.watch(agent)
     }
 
     fn ensure_child_loaded(&self, parent: ThreadId, child: ThreadId) -> BoxFuture<'_, Result<()>> {
