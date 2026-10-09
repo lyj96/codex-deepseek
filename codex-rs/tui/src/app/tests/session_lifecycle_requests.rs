@@ -189,7 +189,7 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
     assert!(turns[4]["cyberAccessProgram"].is_null());
     app.chat_widget
         .set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
-        app.chat_widget.set_daybreak_enabled(/*enabled*/ true);
+    app.chat_widget.set_daybreak_enabled(/*enabled*/ true);
     app.chat_widget.update_account_state(
         Some(crate::status::StatusAccountDisplay::ApiKey),
         /*plan_type*/ None,
@@ -202,7 +202,7 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
     );
     app.submit_thread_op(&mut server, thread_id, turn.clone())
         .await?;
-        app.chat_widget.set_daybreak_enabled(/*enabled*/ false);
+    app.chat_widget.set_daybreak_enabled(/*enabled*/ false);
     app.submit_thread_op(&mut server, thread_id, turn).await?;
     let turns = recorded_params(&requests, "turn/start");
     assert_eq!(turns[5]["cyberAccessProgram"], "daybreakBlue");

@@ -88,8 +88,8 @@ use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
-use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentRequests;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WorldStateItem;
 use codex_thread_store::ArchiveThreadParams;
@@ -1087,7 +1087,13 @@ async fn encrypted_agent_message_cannot_cross_to_external_provider(
             .runtime
             .registry
             .save_evicted_environments(child.thread_id, environments);
-        assert!(harness.manager.remove_thread(&child.thread_id).await.is_some());
+        assert!(
+            harness
+                .manager
+                .remove_thread(&child.thread_id)
+                .await
+                .is_some()
+        );
         assert_thread_not_loaded(&harness.manager, child.thread_id).await;
     }
     let turn = root.session.new_default_turn().await;
@@ -1112,7 +1118,8 @@ async fn encrypted_agent_message_cannot_cross_to_external_provider(
         EncryptedMessageRecipient::LoadedExternal | EncryptedMessageRecipient::EvictedExternal => {
             let err = result.expect_err("encrypted content must not reach an external provider");
             assert!(
-                err.to_string().contains("cannot be sent to an external provider"),
+                err.to_string()
+                    .contains("cannot be sent to an external provider"),
                 "{err}"
             );
             assert!(harness.control.take_mailbox(child.thread_id).is_empty());
