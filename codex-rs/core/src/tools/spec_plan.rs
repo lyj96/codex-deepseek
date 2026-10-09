@@ -1493,7 +1493,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                             /*description_override*/ None,
                         ),
                         SPAWN_EXTERNAL_AGENT_TOOL_NAME,
-                        "Spawn an agent using a configured external model provider. Set `model` to one of the configured external model ids; `agent_type` is optional. External-provider agents may use `fork_turns`=`all` or a positive integer to inherit history across configured external providers. When the current agent uses OpenAI, set `fork_turns` to `none` because encrypted OpenAI history cannot cross providers.",
+                        "Spawn an agent using a configured external model provider. Set `model` to one of the configured external model ids; `agent_type` is optional. External-provider agents may use `fork_turns`=`all` to inherit full history across configured external providers. Legacy positive turn counts also inherit full history, not partial history. When the current agent uses OpenAI, set `fork_turns` to `none` because encrypted OpenAI history cannot cross providers.",
                     ),
                     exposure,
                 );
@@ -1688,7 +1688,7 @@ impl ToolExecutor<ToolInvocation> for PlaintextExternalAgentHandler {
                 .and_then(|properties| properties.get_mut("fork_turns"))
         {
             fork_turns_schema.description = Some(
-                "Optional number of turns to fork. Defaults to `all`. External-provider agents may use `all` or a positive integer even when the target uses another configured external provider. When the current agent uses OpenAI, use `none` because encrypted OpenAI history cannot cross providers."
+                "Parent history to inherit. Defaults to `all`; use `none` to start without parent history. External-provider agents may use `all` even when the target uses another configured external provider. Legacy positive turn counts inherit full history, not partial history. When the current agent uses OpenAI, use `none` because encrypted OpenAI history cannot cross providers."
                     .to_string(),
             );
         }

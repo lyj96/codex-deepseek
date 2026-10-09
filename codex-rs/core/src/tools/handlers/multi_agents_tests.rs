@@ -1327,8 +1327,12 @@ async fn multi_agent_v2_external_spawn_send_external_message_uses_plaintext() {
     }));
 }
 
+#[test_case::test_case("all"; "explicit_full_history")]
+#[test_case::test_case("1"; "legacy_turn_count")]
 #[tokio::test]
-async fn multi_agent_v2_external_spawn_allows_full_history_across_external_providers() {
+async fn multi_agent_v2_external_spawn_allows_full_history_across_external_providers(
+    fork_turns: &str,
+) {
     let (mut session, mut turn) = make_session_and_context().await;
     install_deepseek_provider_with_catalog(&mut turn).await;
     install_qwen_provider_with_catalog(&mut turn).await;
@@ -1363,7 +1367,7 @@ async fn multi_agent_v2_external_spawn_allows_full_history_across_external_provi
                 "task_name": "qwen_branch",
                 "model": "qwen-flash",
                 "reasoning_effort": "high",
-                "fork_turns": "all"
+                "fork_turns": fork_turns
             })),
         ))
         .await
