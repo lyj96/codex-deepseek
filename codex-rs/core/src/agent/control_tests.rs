@@ -88,8 +88,8 @@ use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
-use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WorldStateItem;
 use codex_thread_store::ArchiveThreadParams;
@@ -1116,7 +1116,9 @@ async fn encrypted_agent_message_cannot_cross_to_external_provider(
         .await;
     match recipient {
         EncryptedMessageRecipient::LoadedExternal | EncryptedMessageRecipient::EvictedExternal => {
-            let err = result.expect_err("encrypted content must not reach an external provider");
+            let err = result
+                .err()
+                .expect("encrypted content must not reach an external provider");
             assert!(
                 err.to_string()
                     .contains("cannot be sent to an external provider"),
@@ -1294,9 +1296,9 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
             parent_thread
                 .session
                 .update_settings(SessionSettingsUpdate {
-                    environments: Some(TurnEnvironmentRequests::new(
+                    environments: Some(TurnEnvironmentSelections::new(
                         parent_turn.config.cwd.clone(),
-                        vec![selection.into_request()],
+                        vec![selection],
                     )),
                     ..Default::default()
                 })
