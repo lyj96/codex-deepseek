@@ -3,6 +3,9 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
 
+pub(crate) static PENDING_MAILBOX_MESSAGES: codex_diagnostics::Gauge =
+    codex_diagnostics::Gauge::new("core.mailbox.pending");
+
 const AGENT_COMMUNICATION_TARGET: &str = "codex_otel.agent_communication";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
