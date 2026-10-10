@@ -197,6 +197,13 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all spawn_inherits_first_pending_owner_configuration
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all tree_shutdown
+      - name: Test stable TUI question and daemon compatibility fixes
+        working-directory: codex-rs
+        run: |
+          CARGO_BUILD_JOBS=1 just test -p codex-tui --lib bottom_pane::async_questions
+          CARGO_BUILD_JOBS=1 just test -p codex-tui --lib daemon_startup_tests
+          CARGO_BUILD_JOBS=1 just test -p codex-tui --test all suite::daemon_compatibility
+          CARGO_BUILD_JOBS=1 just test -p codex-cli --test daemon_startup
 
   windows-installer:
     runs-on: windows-2025
