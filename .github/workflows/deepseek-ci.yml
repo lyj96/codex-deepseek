@@ -202,6 +202,8 @@ jobs:
         run: |
           CARGO_BUILD_JOBS=1 just test -p codex-tui --lib bottom_pane::async_questions
           CARGO_BUILD_JOBS=1 just test -p codex-tui --lib daemon_startup_tests
+          CARGO_BUILD_JOBS=1 just test -p codex-tui --lib daybreak_refusal_offers_enable_for_the_next_turn
+          CARGO_BUILD_JOBS=1 just test -p codex-tui --lib empty_vim_normal_slash_opens_commands
           CARGO_BUILD_JOBS=1 just test -p codex-tui --test all suite::daemon_compatibility
           CARGO_BUILD_JOBS=1 just test -p codex-cli --test daemon_startup
 
