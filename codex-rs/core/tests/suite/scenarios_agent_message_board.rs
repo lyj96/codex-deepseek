@@ -538,25 +538,26 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
     disable_direct_message: bool,
 ) -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
+    let configure_runtime = move |config: &mut codex_core::config::Config| {
+        configure(config);
+        config.multi_agent_v2.disable_direct_message = disable_direct_message;
+        config
+            .model_providers
+            .insert("deepseek".to_string(), config.model_provider.clone());
+        let mut external_catalog = config.model_catalog.clone().expect("scenario catalog");
+        external_catalog.models.truncate(1);
+        external_catalog.models[0].slug = "deepseek-test".to_string();
+        external_catalog.models[0].display_name = "DeepSeek test".to_string();
+        let catalog_dir = config.codex_home.join("model-catalogs");
+        std::fs::create_dir_all(&catalog_dir).expect("create external catalog directory");
+        std::fs::write(
+            catalog_dir.join("deepseek.json"),
+            serde_json::to_vec(&external_catalog).expect("serialize external catalog"),
+        )
+        .expect("write external catalog");
+    };
     let root = test_codex()
-        .with_config(move |config| {
-            configure(config);
-            config.multi_agent_v2.disable_direct_message = disable_direct_message;
-            config
-                .model_providers
-                .insert("deepseek".to_string(), config.model_provider.clone());
-            let mut external_catalog = config.model_catalog.clone().expect("scenario catalog");
-            external_catalog.models.truncate(1);
-            external_catalog.models[0].slug = "deepseek-test".to_string();
-            external_catalog.models[0].display_name = "DeepSeek test".to_string();
-            let catalog_dir = config.codex_home.join("model-catalogs");
-            std::fs::create_dir_all(&catalog_dir).expect("create external catalog directory");
-            std::fs::write(
-                catalog_dir.join("deepseek.json"),
-                serde_json::to_vec(&external_catalog).expect("serialize external catalog"),
-            )
-            .expect("write external catalog");
-        })
+        .with_config(configure_runtime)
         .with_model_info_override("gpt-5.5", |model| {
             model.multi_agent_version = Some(MultiAgentVersion::V2);
         })
@@ -687,8 +688,7 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
     let base_url = format!("{}/v1", streaming.uri());
     let resumed = test_codex()
         .with_config(move |config| {
-            configure(config);
-            config.multi_agent_v2.disable_direct_message = disable_direct_message;
+            configure_runtime(config);
             config.model_provider.base_url = Some(base_url);
             config
                 .features
