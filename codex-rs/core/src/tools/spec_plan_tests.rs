@@ -2925,11 +2925,14 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
     }
 }
 
-#[test_case::test_case(false; "inline_catalog")]
-#[test_case::test_case(true; "context_catalog")]
+#[test_case::test_case(false, false; "inline_catalog_direct_messages")]
+#[test_case::test_case(true, false; "context_catalog_direct_messages")]
+#[test_case::test_case(false, true; "inline_catalog_channels_only")]
+#[test_case::test_case(true, true; "context_catalog_channels_only")]
 #[tokio::test]
 async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
     model_catalog_in_context: bool,
+    disable_direct_message: bool,
 ) {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
@@ -2953,6 +2956,7 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
         )
         .expect("write external model catalog");
         update_config(turn, |config| {
+            config.multi_agent_v2.disable_direct_message = disable_direct_message;
             config
                 .model_providers
                 .insert("deepseek".to_string(), config.model_provider.clone());
@@ -2965,6 +2969,11 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
         SEND_EXTERNAL_MESSAGE_TOOL_NAME,
         FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
     ] {
+        if disable_direct_message && tool_name != SPAWN_EXTERNAL_AGENT_TOOL_NAME {
+            plan.assert_visible_lacks(&[tool_name]);
+            plan.assert_registered_lacks(&[tool_name]);
+            continue;
+        }
         let ToolSpec::Function(tool) = plan.visible_spec(tool_name) else {
             panic!("expected {tool_name} function tool");
         };
@@ -3007,6 +3016,14 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
     let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {
         panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
     };
+    for tool_name in ["send_message", "followup_task"] {
+        assert_eq!(
+            plan.namespace_function_names(MULTI_AGENT_V2_NAMESPACE)
+                .iter()
+                .any(|name| name == tool_name),
+            !disable_direct_message
+        );
+    }
     let official_spawn = namespace
         .tools
         .iter()

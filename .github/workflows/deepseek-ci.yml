@@ -196,6 +196,7 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all spawn_inherits_first_pending_owner_configuration
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all board_unsubscribe_survives_post_and_resume_until_resubscribed
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all tree_shutdown
       - name: Test stable TUI question and daemon compatibility fixes
         working-directory: codex-rs

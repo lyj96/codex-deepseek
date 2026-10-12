@@ -542,6 +542,20 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
         .with_config(move |config| {
             configure(config);
             config.multi_agent_v2.disable_direct_message = disable_direct_message;
+            config
+                .model_providers
+                .insert("deepseek".to_string(), config.model_provider.clone());
+            let mut external_catalog = config.model_catalog.clone().expect("scenario catalog");
+            external_catalog.models.truncate(1);
+            external_catalog.models[0].slug = "deepseek-test".to_string();
+            external_catalog.models[0].display_name = "DeepSeek test".to_string();
+            let catalog_dir = config.codex_home.join("model-catalogs");
+            std::fs::create_dir_all(&catalog_dir).expect("create external catalog directory");
+            std::fs::write(
+                catalog_dir.join("deepseek.json"),
+                serde_json::to_vec(&external_catalog).expect("serialize external catalog"),
+            )
+            .expect("write external catalog");
         })
         .with_model_info_override("gpt-5.5", |model| {
             model.multi_agent_version = Some(MultiAgentVersion::V2);
@@ -825,6 +839,19 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
     let requests = streaming.requests().await;
     for body in &requests {
         let request: Value = serde_json::from_slice(body)?;
+        let tools = request["tools"].as_array().context("model-visible tools")?;
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "spawn_external_agent")
+        );
+        for name in ["send_external_message", "followup_external_task"] {
+            assert_eq!(
+                tools.iter().any(|tool| tool["name"] == name),
+                !disable_direct_message,
+                "{name}"
+            );
+        }
         for name in ["send_message", "followup_task"] {
             assert_eq!(
                 responses::namespace_child_tool(&request, "collaboration", name).is_some(),
