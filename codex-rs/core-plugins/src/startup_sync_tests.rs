@@ -374,8 +374,11 @@ async fn ordinary_clone_rejects_tracked_embedded_bare_repository() {
 
     let mut guarded = git_command(Path::new("git")).expect("trusted Git command");
     guarded.args(["status", "--short"]).current_dir(&nested);
-    let guarded =
-        run_git_command_with_timeout(&mut guarded, "guarded status", Duration::from_secs(5));
+    let guarded = run_git_command_with_timeout(
+        &mut guarded,
+        "guarded status",
+        Duration::from_secs(/*secs*/ 5),
+    );
     assert!(guarded.is_err(), "startup Git should reject the repository");
     assert!(
         guarded
