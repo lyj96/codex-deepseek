@@ -38,7 +38,14 @@ pub fn ensure_safe_repository_discovery(command: &Command) -> io::Result<()> {
             if !path.is_empty() {
                 cwd = cwd.join(path);
             }
-        } else if arg == "-c" || arg == "--config-env" {
+        } else if arg.as_encoded_bytes().starts_with(b"-C") {
+            let path = arg.to_str().and_then(|arg| arg.strip_prefix("-C"))
+                .ok_or_else(|| io::Error::other("invalid attached Git -C path"))?;
+            if !path.is_empty() {
+                cwd = cwd.join(path);
+            }
+        } else if arg == "-c" || arg == "--config-env" || arg == "--work-tree"
+            || arg == "--namespace" || arg == "--super-prefix" {
             args.next().ok_or_else(|| io::Error::other("missing Git configuration option"))?;
         } else if !arg.as_encoded_bytes().starts_with(b"-") {
             break;

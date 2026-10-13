@@ -38,6 +38,9 @@ fn follows_repeated_relative_git_c_options() {
         "-c", "safe.bareRepository=explicit", "-C", "nested", "-C", "child", "status",
     ]);
     assert!(ensure_safe_repository_discovery(&command).is_err());
+    let mut attached = Command::new("git");
+    attached.current_dir(temp.path()).args(["--work-tree", ".", "-Cnested", "-Cchild", "status"]);
+    assert!(ensure_safe_repository_discovery(&attached).is_err());
 }
 
 #[test]
