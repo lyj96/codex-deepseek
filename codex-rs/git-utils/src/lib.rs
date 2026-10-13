@@ -1,4 +1,5 @@
 mod apply;
+mod bare_repository;
 mod baseline;
 mod branch;
 mod errors;
@@ -21,6 +22,7 @@ pub use apply::apply_git_patch;
 pub use apply::extract_paths_from_patch;
 pub use apply::parse_git_apply_output;
 pub use apply::stage_paths;
+pub use bare_repository::ensure_safe_repository_discovery;
 pub use baseline::GitBaselineChange;
 pub use baseline::GitBaselineChangeStatus;
 pub use baseline::GitBaselineDiff;

@@ -205,6 +205,8 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-skills-extension --lib
           CARGO_BUILD_JOBS=1 just test -p codex-core-plugins --lib
           CARGO_BUILD_JOBS=1 just test -p codex-external-agent-migration --lib
+          CARGO_BUILD_JOBS=1 just test -p codex-tcp-tunnel --lib
+            CARGO_BUILD_JOBS=1 just test -p codex-git-utils --lib
       - name: Test stable TUI question and daemon compatibility fixes
         working-directory: codex-rs
         run: |

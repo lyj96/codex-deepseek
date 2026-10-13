@@ -596,6 +596,8 @@ pub(super) fn write_test_config(codex_home: &Path, repo_root: &Path) -> Result<(
          suppress_unstable_features_warning = true\nanalytics.enabled = false\n\
          features.daemon_auto_start = false\n\
          notice.model_migrations.\"gpt-5.6-terra\" = \"gpt-6-sol\"\n\n\
+         [model_providers.openai]\nname = \"OpenAI\"\n\
+         base_url = \"http://127.0.0.1:9/v1\"\nrequires_openai_auth = true\n\n\
          [projects.\"{repo_root}\"]\ntrust_level = \"trusted\"\n"
     );
     std::fs::write(codex_home.join("config.toml"), config)

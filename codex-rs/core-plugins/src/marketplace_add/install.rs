@@ -119,6 +119,8 @@ fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), MarketplaceAddError>
         command.current_dir(cwd);
     }
 
+    codex_git_utils::ensure_safe_repository_discovery(&command)
+        .map_err(|err| MarketplaceAddError::Internal(format!("refused unsafe Git: {err}")))?;
     let output = command.output().map_err(|err| {
         MarketplaceAddError::Internal(format!("failed to run git {}: {err}", args.join(" ")))
     })?;
