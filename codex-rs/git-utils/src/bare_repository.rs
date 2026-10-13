@@ -61,13 +61,28 @@ pub fn ensure_safe_repository_discovery(command: &Command) -> io::Result<()> {
         ..Default::default()
     };
     match gix::discover::upwards_opts(&cwd, options) {
-        Ok((gix::discover::repository::Path::Repository(_), _)) => Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "not a git repository: implicitly discovered bare repository refused",
-        )),
-        Ok((gix::discover::repository::Path::WorkTree(_), _))
-        | Ok((gix::discover::repository::Path::LinkedWorkTree { .. }, _))
-        | Err(gix::discover::upwards::Error::NoGitRepository { .. }) => Ok(()),
+        Ok((repository, _)) => {
+            // Tracked commondir/gitdir files can also look like linked worktree
+            // metadata. Require the same repository to be reachable through an
+            // actual .git boundary, not just a claimed worktree classification.
+            let dot_git_options = gix::discover::upwards::Options {
+                cross_fs: true,
+                dot_git_only: true,
+                ..Default::default()
+            };
+            if !matches!(repository, gix::discover::repository::Path::Repository(_))
+                && let Ok((dot_git_repository, _)) = gix::discover::upwards_opts(&cwd, dot_git_options)
+                && repository == dot_git_repository
+            {
+                Ok(())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "not a git repository: implicitly discovered bare repository refused",
+                ))
+            }
+        }
+        Err(gix::discover::upwards::Error::NoGitRepository { .. }) => Ok(()),
         Err(err) => Err(io::Error::other(format!("unsafe Git repository discovery: {err}"))),
     }
 }

@@ -106,6 +106,24 @@ fn non_repository_commands_remain_allowed_but_missing_cwd_fails_closed() {
     assert!(ensure_safe_repository_discovery(&command).is_err());
 }
 
+#[test]
+fn tracked_linked_worktree_metadata_cannot_bypass_guard() {
+    let temp = tempfile::tempdir().unwrap();
+    embedded_repository(&temp.path().join(".git"));
+    let nested = temp.path().join("nested");
+    embedded_repository(&nested);
+    std::fs::write(nested.join("commondir"), temp.path().join(".git").display().to_string()).unwrap();
+    std::fs::write(nested.join("gitdir"), temp.path().join(".git").display().to_string()).unwrap();
+    let (discovered, _) = gix::discover::upwards(&nested).unwrap();
+    assert!(matches!(discovered, gix::discover::repository::Path::LinkedWorkTree { .. }));
+    let mut command = Command::new("git");
+    command.current_dir(&nested).arg("status");
+    assert_eq!(
+        ensure_safe_repository_discovery(&command).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied,
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_cwd_uses_physical_ancestors() {
