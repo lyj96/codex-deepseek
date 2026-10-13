@@ -1,11 +1,20 @@
 name: sdk
 
 on:
+  # Allow focused SDK verification without restarting the entire Bazel matrix.
+  workflow_dispatch:
+    inputs:
+      run_bazel:
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       run_bazel:
         type: boolean
         default: true
+
+permissions:
+  contents: read
 
 jobs:
   python-sdk-installation:
