@@ -24,15 +24,25 @@ fn yaml_replacement_preserves_subagent_frontmatter_semantics() {
         let document = parse_document_content(&format!(
             "---\nname: agent\ndescription: {yaml_scalar}\n? [a, b]\n: ignored\n---\nTask body\n"
         ));
-        let scalar = document.frontmatter.get("description").and_then(FrontmatterValue::as_scalar);
+        let scalar = document
+            .frontmatter
+            .get("description")
+            .and_then(FrontmatterValue::as_scalar);
         assert_eq!(scalar, expected, "{yaml_scalar}");
-        assert_eq!(document.frontmatter.len(), 2, "non-string keys remain ignored");
+        assert_eq!(
+            document.frontmatter.len(),
+            2,
+            "non-string keys remain ignored"
+        );
         assert_eq!(agent_metadata(&document).is_some(), expected.is_some());
     }
     let duplicate = parse_document_content(
         "---\nname: agent\ndescription: first\ndescription: second\n---\nTask body\n",
     );
-    assert!(agent_metadata(&duplicate).is_none(), "duplicate fields must not import an agent");
+    assert!(
+        agent_metadata(&duplicate).is_none(),
+        "duplicate fields must not import an agent"
+    );
 }
 
 const TEST_REWRITE_PROFILE: RewriteProfile = RewriteProfile::new(

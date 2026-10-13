@@ -34,19 +34,28 @@ pub fn ensure_safe_repository_discovery(command: &Command) -> io::Result<()> {
             return Err(io::Error::other("missing explicit Git directory"));
         }
         if arg == "-C" {
-            let path = args.next().ok_or_else(|| io::Error::other("missing Git -C path"))?;
+            let path = args
+                .next()
+                .ok_or_else(|| io::Error::other("missing Git -C path"))?;
             if !path.is_empty() {
                 cwd = cwd.join(path);
             }
         } else if arg.as_encoded_bytes().starts_with(b"-C") {
-            let path = arg.to_str().and_then(|arg| arg.strip_prefix("-C"))
+            let path = arg
+                .to_str()
+                .and_then(|arg| arg.strip_prefix("-C"))
                 .ok_or_else(|| io::Error::other("invalid attached Git -C path"))?;
             if !path.is_empty() {
                 cwd = cwd.join(path);
             }
-        } else if arg == "-c" || arg == "--config-env" || arg == "--work-tree"
-            || arg == "--namespace" || arg == "--super-prefix" {
-            args.next().ok_or_else(|| io::Error::other("missing Git configuration option"))?;
+        } else if arg == "-c"
+            || arg == "--config-env"
+            || arg == "--work-tree"
+            || arg == "--namespace"
+            || arg == "--super-prefix"
+        {
+            args.next()
+                .ok_or_else(|| io::Error::other("missing Git configuration option"))?;
         } else if !arg.as_encoded_bytes().starts_with(b"-") {
             break;
         }
@@ -71,7 +80,8 @@ pub fn ensure_safe_repository_discovery(command: &Command) -> io::Result<()> {
                 ..Default::default()
             };
             if !matches!(repository, gix::discover::repository::Path::Repository(_))
-                && let Ok((dot_git_repository, _)) = gix::discover::upwards_opts(&cwd, dot_git_options)
+                && let Ok((dot_git_repository, _)) =
+                    gix::discover::upwards_opts(&cwd, dot_git_options)
                 && repository == dot_git_repository
             {
                 Ok(())
@@ -83,7 +93,9 @@ pub fn ensure_safe_repository_discovery(command: &Command) -> io::Result<()> {
             }
         }
         Err(gix::discover::upwards::Error::NoGitRepository { .. }) => Ok(()),
-        Err(err) => Err(io::Error::other(format!("unsafe Git repository discovery: {err}"))),
+        Err(err) => Err(io::Error::other(format!(
+            "unsafe Git repository discovery: {err}"
+        ))),
     }
 }
 

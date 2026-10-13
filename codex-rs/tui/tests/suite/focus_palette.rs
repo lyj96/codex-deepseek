@@ -61,14 +61,20 @@ fn pty_child_owns_its_terminal_session() -> Result<()> {
     let mut terminal = PtyCodex::start(
         &repo_root,
         codex_home,
-        &["--no-daemon", "-c", "features.api_key_model_discovery=false"],
+        &[
+            "--no-daemon",
+            "-c",
+            "features.api_key_model_discovery=false",
+        ],
     )?;
     terminal.wait_for_startup()?;
 
     let pid = terminal.child.id();
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
     // The executable's name may contain spaces or parentheses; fields start after its final ')'.
-    let (_, fields) = stat.rsplit_once(") ").context("missing process stat fields")?;
+    let (_, fields) = stat
+        .rsplit_once(") ")
+        .context("missing process stat fields")?;
     let fields = fields.split_whitespace().collect::<Vec<_>>();
     ensure!(fields.len() >= 6, "missing terminal process stat fields");
     assert_eq!(
@@ -80,7 +86,10 @@ fn pty_child_owns_its_terminal_session() -> Result<()> {
         (pid, pid, pid),
         "PTY target must lead its own session and foreground process group"
     );
-    ensure!(fields[4].parse::<i64>()? != 0, "PTY target has no controlling terminal");
+    ensure!(
+        fields[4].parse::<i64>()? != 0,
+        "PTY target has no controlling terminal"
+    );
     Ok(())
 }
 

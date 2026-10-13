@@ -6,10 +6,28 @@ use super::parse_skill_frontmatter_metadata;
 #[test]
 fn yaml_replacement_preserves_skill_scalar_spellings_and_empty_metadata() {
     for scalar in [
-        "true", "TRUE", "tRuE", "NO", "null", "nUlL", "42", "042", "0x2A", "0o52",
-        "1_000", "-0.0", ".nan", ".inf", "1e999", "18446744073709551616",
+        "true",
+        "TRUE",
+        "tRuE",
+        "NO",
+        "null",
+        "nUlL",
+        "42",
+        "042",
+        "0x2A",
+        "0o52",
+        "1_000",
+        "-0.0",
+        ".nan",
+        ".inf",
+        "1e999",
+        "18446744073709551616",
     ] {
-        let yaml_scalar = if scalar == "null" { "!custom null" } else { scalar };
+        let yaml_scalar = if scalar == "null" {
+            "!custom null"
+        } else {
+            scalar
+        };
         let parsed = parse_skill_frontmatter_metadata(
             &format!("---\ndescription: {yaml_scalar}\nmetadata:\n---\n"),
             || "fallback".to_string(),
