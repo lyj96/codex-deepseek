@@ -1,5 +1,5 @@
 load("@crates//:data.bzl", "DEP_DATA")
-load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
 load("//bazel/rules/testing:foreign_platform_binary.bzl", "foreign_platform_binary")
@@ -183,6 +183,35 @@ workspace_root_test = rule(
     },
 )
 
+def _crate_aliases(package_data, dep_kinds):
+    # The pinned resolver includes normal, dev and build aliases in one map.
+    # Match each rule's dependency buckets to avoid adding dev-only cycles or
+    # target-specific dependencies to libraries and build scripts.
+    dep_aliases = package_data["aliases"]
+    shared_aliases = {}
+    platform_aliases = {}
+    for kind in dep_kinds:
+        for dep in package_data.get(kind, []):
+            if dep in dep_aliases:
+                shared_aliases[dep] = dep_aliases[dep]
+        for platform, deps in package_data.get(kind + "_by_platform", {}).items():
+            branch = platform_aliases.get(platform, {})
+            for dep in deps:
+                if dep in dep_aliases:
+                    branch[dep] = dep_aliases[dep]
+            if branch:
+                platform_aliases[platform] = branch
+
+    if not platform_aliases:
+        return shared_aliases
+
+    branches = {
+        platform: shared_aliases | branch
+        for platform, branch in platform_aliases.items()
+    }
+    branches["//conditions:default"] = shared_aliases
+    return select(branches)
+
 def codex_rust_crate(
         name,
         crate_name,
@@ -319,7 +348,7 @@ def codex_rust_crate(
     if build_script_enabled and native.glob(["build.rs"], allow_empty = True):
         cargo_build_script(
             name = name + "-build-script",
-            aliases = aliases(),
+            aliases = _crate_aliases(package_data, ["build_deps"]),
             srcs = ["build.rs"],
             deps = all_crate_deps(build = True),
             data = build_script_data,
@@ -332,7 +361,7 @@ def codex_rust_crate(
         lib_rule = rust_proc_macro if proc_macro else rust_library
         lib_rule(
             name = name,
-            aliases = aliases(),
+            aliases = _crate_aliases(package_data, ["deps"]),
             crate_name = crate_name,
             crate_features = crate_features,
             deps = all_crate_deps() + maybe_deps + deps_extra,
@@ -356,7 +385,7 @@ def codex_rust_crate(
         # deliberately changes cwd so Insta sees Cargo-like snapshot paths.
         rust_test(
             name = unit_test_binary,
-            aliases = aliases(),
+            aliases = _crate_aliases(package_data, ["deps", "dev_deps"]),
             crate = name,
             crate_features = crate_features,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
@@ -411,7 +440,7 @@ def codex_rust_crate(
         cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath :%s)" % binary
         rust_binary(
             name = binary,
-            aliases = aliases(),
+            aliases = _crate_aliases(package_data, ["deps"]),
             crate_name = binary.replace("-", "_"),
             crate_root = main,
             deps = all_crate_deps() + maybe_deps + deps_extra,
@@ -442,7 +471,7 @@ def codex_rust_crate(
         # sharding while Clippy can still discover the underlying test crate.
         rust_test(
             name = binary_unit_test_binary,
-            aliases = aliases(),
+            aliases = _crate_aliases(package_data, ["deps", "dev_deps"]),
             crate = ":" + binary,
             crate_features = crate_features,
             deps = all_crate_deps(normal_dev = True),
@@ -569,7 +598,7 @@ def codex_rust_crate(
             # materialization, sharding, and flaky retry behavior.
             rust_test(
                 name = integration_test_binary,
-                aliases = aliases(),
+                aliases = _crate_aliases(package_data, ["deps", "dev_deps"]),
                 crate_name = test_crate_name,
                 crate_root = test,
                 srcs = [test],
@@ -611,7 +640,7 @@ def codex_rust_crate(
             # Bazel's normal test environment.
             rust_test(
                 name = test_name,
-                aliases = aliases(),
+                aliases = _crate_aliases(package_data, ["deps", "dev_deps"]),
                 crate_name = test_crate_name,
                 crate_root = test,
                 srcs = [test],
@@ -688,7 +717,7 @@ def codex_rust_crate(
 
         rust_test(
             name = windows_cross_test_binary,
-            aliases = aliases(),
+            aliases = _crate_aliases(package_data, ["deps", "dev_deps"]),
             crate_name = test_crate_name,
             crate_root = test,
             srcs = [test],
