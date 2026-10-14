@@ -88,6 +88,7 @@ pub(crate) async fn run_git_command_with_timeout_output(
     command: &mut Command,
     timeout_duration: Duration,
 ) -> Option<Output> {
+    crate::ensure_safe_repository_discovery(command.as_std()).ok()?;
     let (child, process_tree) = spawn_git_command(command)?;
     wait_for_git_command_with_timeout_output(child, process_tree, timeout_duration).await
 }

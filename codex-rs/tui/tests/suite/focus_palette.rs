@@ -4,6 +4,7 @@ use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Child;
 use std::process::Command;
@@ -48,6 +49,47 @@ fn focus_gained_with_unanswered_palette_queries_preserves_immediate_input() -> R
     terminal.write_input(delayed_input.as_bytes())?;
     terminal.wait_for_focus_input(&delayed_input, delayed_focus_started, startup_output_len)?;
 
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pty_child_owns_its_terminal_session() -> Result<()> {
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex_home = tempfile::tempdir()?;
+    write_test_config(codex_home.path(), &repo_root)?;
+    let mut terminal = PtyCodex::start(
+        &repo_root,
+        codex_home,
+        &[
+            "--no-daemon",
+            "-c",
+            "features.api_key_model_discovery=false",
+        ],
+    )?;
+    terminal.wait_for_startup()?;
+
+    let pid = terminal.child.id();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    // The executable's name may contain spaces or parentheses; fields start after its final ')'.
+    let (_, fields) = stat
+        .rsplit_once(") ")
+        .context("missing process stat fields")?;
+    let fields = fields.split_whitespace().collect::<Vec<_>>();
+    ensure!(fields.len() >= 6, "missing terminal process stat fields");
+    assert_eq!(
+        (
+            fields[2].parse::<u32>()?,
+            fields[3].parse::<u32>()?,
+            fields[5].parse::<u32>()?,
+        ),
+        (pid, pid, pid),
+        "PTY target must lead its own session and foreground process group"
+    );
+    ensure!(
+        fields[4].parse::<i64>()? != 0,
+        "PTY target has no controlling terminal"
+    );
     Ok(())
 }
 
@@ -353,6 +395,21 @@ impl PtyCodex {
         if let Some(editor) = editor {
             command.env("VISUAL", editor);
         }
+        // SAFETY: This callback runs after the child's stdio has been attached to the PTY slave.
+        // It only makes async-signal-safe calls to establish the child's own controlling terminal,
+        // without changing the test runner's session or the user's existing terminal.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                #[allow(clippy::cast_lossless)]
+                if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
         let child = command
             .args(extra_args)
             .arg("-C")
@@ -545,6 +602,7 @@ pub(super) fn write_test_config(codex_home: &Path, repo_root: &Path) -> Result<(
     let repo_root = repo_root.display();
     let config = format!(
         "model = \"gpt-5.6-terra\"\nmodel_provider = \"openai\"\n\
+         openai_base_url = \"http://127.0.0.1:9/v1\"\n\
          suppress_unstable_features_warning = true\nanalytics.enabled = false\n\
          features.daemon_auto_start = false\n\
          notice.model_migrations.\"gpt-5.6-terra\" = \"gpt-6-sol\"\n\n\

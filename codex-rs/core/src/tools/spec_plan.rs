@@ -1497,22 +1497,24 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     ),
                     exposure,
                 );
-                registry.register_trusted_with_exposure(
-                    plaintext_external_agent_handler(
-                        SendMessageHandlerV2,
-                        SEND_EXTERNAL_MESSAGE_TOOL_NAME,
-                        "Queue a plaintext message for an agent that uses an external model provider.",
-                    ),
-                    exposure,
-                );
-                registry.register_trusted_with_exposure(
-                    plaintext_external_agent_handler(
-                        FollowupTaskHandlerV2,
-                        FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
-                        "Send a plaintext follow-up task to an agent that uses an external model provider.",
-                    ),
-                    exposure,
-                );
+                if !turn_context.config.multi_agent_v2.disable_direct_message {
+                    registry.register_trusted_with_exposure(
+                        plaintext_external_agent_handler(
+                            SendMessageHandlerV2,
+                            SEND_EXTERNAL_MESSAGE_TOOL_NAME,
+                            "Queue a plaintext message for an agent that uses an external model provider.",
+                        ),
+                        exposure,
+                    );
+                    registry.register_trusted_with_exposure(
+                        plaintext_external_agent_handler(
+                            FollowupTaskHandlerV2,
+                            FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
+                            "Send a plaintext follow-up task to an agent that uses an external model provider.",
+                        ),
+                        exposure,
+                    );
+                }
             }
         } else {
             let agent_type_description =

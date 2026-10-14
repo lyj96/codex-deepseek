@@ -638,18 +638,16 @@ fn git_ls_remote_head_sha(codex_home: &Path, git_binary: &Path) -> Result<String
 }
 
 fn git_head_sha(repo_path: &Path, git_binary: &Path) -> Result<String, String> {
-    let output = git_command(git_binary)?
-        .arg("-C")
-        .arg(repo_path)
-        .arg("rev-parse")
-        .arg("HEAD")
-        .output()
-        .map_err(|err| {
-            format!(
-                "failed to run git rev-parse HEAD in {}: {err}",
-                repo_path.display()
-            )
-        })?;
+    let mut command = git_command(git_binary)?;
+    command.arg("-C").arg(repo_path).args(["rev-parse", "HEAD"]);
+    codex_git_utils::ensure_safe_repository_discovery(&command)
+        .map_err(|err| format!("refused unsafe Git repository discovery: {err}"))?;
+    let output = command.output().map_err(|err| {
+        format!(
+            "failed to run git rev-parse HEAD in {}: {err}",
+            repo_path.display()
+        )
+    })?;
     ensure_git_success(&output, "git rev-parse HEAD")?;
 
     let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -685,6 +683,8 @@ fn run_git_command_with_timeout(
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
+    codex_git_utils::ensure_safe_repository_discovery(command)
+        .map_err(|err| format!("refused unsafe {context}: {err}"))?;
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -4,6 +4,78 @@ use super::ParsedSkillFrontmatter;
 use super::parse_skill_frontmatter_metadata;
 
 #[test]
+fn yaml_replacement_preserves_skill_scalar_spellings_and_empty_metadata() {
+    for scalar in [
+        "true",
+        "TRUE",
+        "tRuE",
+        "NO",
+        "null",
+        "nUlL",
+        "42",
+        "042",
+        "0x2A",
+        "0o52",
+        "1_000",
+        "-0.0",
+        ".nan",
+        ".inf",
+        "1e999",
+        "18446744073709551616",
+    ] {
+        let yaml_scalar = if scalar == "null" {
+            "!custom null"
+        } else {
+            scalar
+        };
+        let parsed = parse_skill_frontmatter_metadata(
+            &format!("---\ndescription: {yaml_scalar}\nmetadata:\n---\n"),
+            || "fallback".to_string(),
+        )
+        .expect("legacy scalar spelling remains a string");
+        assert_eq!(
+            parsed,
+            ParsedSkillFrontmatter {
+                name: "fallback".to_string(),
+                description: scalar.to_string(),
+                short_description: None,
+            },
+            "{yaml_scalar}"
+        );
+    }
+}
+
+#[test]
+fn yaml_replacement_preserves_required_object_and_duplicate_field_validation() {
+    for frontmatter in [
+        "description: text\nmetadata: null",
+        "description: first\ndescription: second",
+        "description: text\nmetadata: [short]",
+    ] {
+        assert!(
+            parse_skill_frontmatter_metadata(&format!("---\n{frontmatter}\n---\n"), || {
+                "fallback".to_string()
+            })
+            .is_err(),
+            "{frontmatter}"
+        );
+    }
+    let parsed = parse_skill_frontmatter_metadata(
+        "---\ndescription: text\nunknown: first\nunknown: second\n---\n",
+        || "fallback".to_string(),
+    )
+    .expect("unknown fields remain ignored");
+    assert_eq!(
+        parsed,
+        ParsedSkillFrontmatter {
+            name: "fallback".to_string(),
+            description: "text".to_string(),
+            short_description: None,
+        }
+    );
+}
+
+#[test]
 fn parses_repairs_and_sanitizes_frontmatter() {
     let parsed = parse_skill_frontmatter_metadata(
         "---\nname:  deploy  service\ndescription: Build for AWS: ECS\nmetadata:\n  short-description:  Deploy   safely\n---\n",
