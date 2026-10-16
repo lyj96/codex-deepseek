@@ -3,6 +3,7 @@ use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::is_user_turn_boundary;
 use codex_history::ResponseItemEnvelope;
 use codex_history::TurnAttribution;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -199,6 +200,12 @@ impl Session {
                 &turn_context.config.features,
             ),
             turn_context.model_info().truncation_policy.into(),
+            |communication| {
+                crate::agent_communication::model_input_item_for_provider(
+                    communication,
+                    &turn_context.config.model_provider_id,
+                )
+            },
         )
     }
 }
@@ -210,6 +217,7 @@ impl ContextManager {
         history_mode: ThreadHistoryMode,
         mut history: Self,
         truncation_policy: TruncationPolicy,
+        communication_to_model_input: impl Fn(&InterAgentCommunication) -> ResponseItem,
     ) -> RolloutReconstruction {
         // Select the compaction and suffix that can affect reconstruction.
         let has_legacy_compaction_without_window_number =
@@ -514,10 +522,7 @@ impl ContextManager {
                     history.replay_annotated_item(response_item, truncation_policy);
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
-                    let response_item = crate::agent_communication::model_input_item_for_provider(
-                        communication,
-                        &turn_context.config.model_provider_id,
-                    );
+                    let response_item = communication_to_model_input(communication);
                     history.record_items(std::iter::once(&response_item), truncation_policy);
                 }
                 RolloutItem::InterAgentCommunicationMetadata { .. } => {}

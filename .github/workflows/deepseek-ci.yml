@@ -198,6 +198,11 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all spawn_inherits_first_pending_owner_configuration
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all board_unsubscribe_survives_post_and_resume_until_resubscribed
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all tree_shutdown
+      - name: Test provider-safe rollout reconstruction and sender provenance
+        working-directory: codex-rs
+        run: |
+          CARGO_BUILD_JOBS=1 just test -p codex-core --lib session::rollout_reconstruction_tests
+          CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent_communication
       - name: Test maintained YAML parser consumers
         working-directory: codex-rs
         run: |

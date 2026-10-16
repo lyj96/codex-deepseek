@@ -108,6 +108,8 @@ pub(crate) fn model_input_item_for_provider(
         communication.content.clone()
     };
     ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text }],

@@ -2892,16 +2892,21 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
     }
 }
 
-#[test_case::test_case(false, false; "inline_catalog_direct_messages")]
-#[test_case::test_case(true, false; "context_catalog_direct_messages")]
-#[test_case::test_case(false, true; "inline_catalog_channels_only")]
-#[test_case::test_case(true, true; "context_catalog_channels_only")]
+#[test_case::test_case(false, false, false; "inline_catalog_direct_messages")]
+#[test_case::test_case(true, false, false; "context_catalog_direct_messages")]
+#[test_case::test_case(false, true, false; "inline_catalog_channels_only")]
+#[test_case::test_case(true, true, false; "context_catalog_channels_only")]
+#[test_case::test_case(false, false, true; "inline_catalog_native_tools_hidden")]
+#[test_case::test_case(true, false, true; "context_catalog_native_tools_hidden")]
+#[test_case::test_case(false, true, true; "inline_catalog_all_messages_hidden")]
+#[test_case::test_case(true, true, true; "context_catalog_all_messages_hidden")]
 #[tokio::test]
 async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
     model_catalog_in_context: bool,
     disable_direct_message: bool,
+    disable_native_tools: bool,
 ) {
-    // The stable channels-only router requires an available board tool.
+    // Keep a board fixture available while testing channels-only schemas.
     let inputs = ToolPlanInputs {
         extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
             namespace: MULTI_AGENT_V2_NAMESPACE,
@@ -2933,6 +2938,7 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
             .expect("write external model catalog");
             update_config(turn, |config| {
                 config.multi_agent_v2.disable_direct_message = disable_direct_message;
+                config.multi_agent_v2.disable_native_tools = disable_native_tools;
                 config
                     .model_providers
                     .insert("deepseek".to_string(), config.model_provider.clone());
@@ -2947,7 +2953,9 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
         SEND_EXTERNAL_MESSAGE_TOOL_NAME,
         FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
     ] {
-        if disable_direct_message && tool_name != SPAWN_EXTERNAL_AGENT_TOOL_NAME {
+        if disable_native_tools
+            || (disable_direct_message && tool_name != SPAWN_EXTERNAL_AGENT_TOOL_NAME)
+        {
             plan.assert_visible_lacks(&[tool_name]);
             plan.assert_registered_lacks(&[tool_name]);
             continue;
@@ -2989,6 +2997,17 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
             );
             assert!(fork_turns_description.contains("encrypted OpenAI history cannot cross"));
         }
+    }
+
+    if disable_native_tools {
+        for tool_name in [
+            "spawn_agent", "send_message", "followup_task", "wait_agent", "interrupt_agent", "list_agents",
+        ] {
+            let qualified_name = format!("{MULTI_AGENT_V2_NAMESPACE}.{tool_name}");
+            plan.assert_registered_lacks(&[&qualified_name]);
+        }
+        assert!(plan.can_manage_children);
+        return;
     }
 
     let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {

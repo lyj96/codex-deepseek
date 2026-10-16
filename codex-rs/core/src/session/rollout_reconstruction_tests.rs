@@ -31,6 +31,72 @@ use std::path::PathBuf;
 use test_case::test_case;
 use uuid::Uuid;
 
+#[test_case("openai", false; "openai_plaintext")]
+#[test_case("openai", true; "openai_encrypted")]
+#[test_case("deepseek", false; "external_plaintext")]
+#[test_case("deepseek", true; "external_encrypted_is_unavailable")]
+fn reconstruct_rollout_uses_recipient_projection_without_changing_sender_evidence(
+    provider_id: &str,
+    encrypted: bool,
+) {
+    let author = AgentPath::root();
+    let recipient = author.join("worker").expect("valid agent path");
+    let message = if encrypted {
+        crate::agent::types::AgentMessage::Encrypted("opaque-test-payload".to_string())
+    } else {
+        crate::agent::types::AgentMessage::Plaintext("inspect the shared workspace".to_string())
+    };
+    let communication = message.into_communication(
+        author,
+        recipient,
+        crate::agent::types::MessageDeliveryMode::TriggerTurn,
+    );
+    let rollout = vec![RolloutItem::InterAgentCommunication(communication.clone())];
+    let projected = ContextManager::reconstruct_rollout(
+        &rollout,
+        ThreadHistoryMode::Legacy,
+        ContextManager::new(),
+        TruncationPolicy::Bytes(4096),
+        |communication| {
+            crate::agent_communication::model_input_item_for_provider(communication, provider_id)
+        },
+    );
+    let native = communication.to_model_input_item();
+    assert_eq!(projected.history.len(), 1);
+    if provider_id == "openai" {
+        assert_eq!(projected.history[0].item, native);
+    } else {
+        let text = if encrypted {
+            format!(
+                "Message Type: NEW_TASK\nTask name: {}\nSender: {}\nPayload:\n[Unavailable encrypted cross-provider payload]",
+                communication.recipient, communication.author
+            )
+        } else {
+            communication.content.clone()
+        };
+        assert_eq!(
+            serde_json::to_value(&projected.history[0].item).unwrap(),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": text}],
+            })
+        );
+        assert!(!serde_json::to_string(&projected.history).unwrap().contains("opaque-test-payload"));
+    }
+
+    let evidence = ContextManager::reconstruct_rollout(
+        &rollout,
+        ThreadHistoryMode::Legacy,
+        ContextManager::new(),
+        TruncationPolicy::Bytes(0),
+        InterAgentCommunication::to_model_input_item,
+    );
+    // Sender authorization retains the structured source message regardless of recipient rendering.
+    assert_eq!(evidence.history.len(), 1);
+    assert!(matches!(evidence.history[0].item, ResponseItem::AgentMessage { .. }));
+}
+
 #[tokio::test]
 async fn recorded_questions_share_queued_input_order_across_resume() {
     let (session, turn) = make_session_and_context().await;

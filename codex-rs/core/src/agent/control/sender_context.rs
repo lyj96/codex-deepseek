@@ -101,6 +101,8 @@ impl LocalAgentRuntime {
                                     ContextManager::new(),
                                     // Tool bodies are not sender authorization evidence.
                                     TruncationPolicy::Bytes(0),
+                                    // Authorization replay keeps native message provenance, not a provider's user-message projection.
+                                    codex_protocol::protocol::InterAgentCommunication::to_model_input_item,
                                 )
                                 .retained_context
                             })
