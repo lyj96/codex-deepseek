@@ -23,6 +23,7 @@ use codex_protocol::security_risk::SecurityRiskScore;
 use codex_protocol::turn_input::CyberAccessProgram;
 use codex_rollout::ModelContextScan;
 use codex_rollout::ModelContextScanProgress;
+use codex_utils_output_truncation::TruncationPolicy;
 use core_test_support::responses::strip_metadata_from_items;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -82,7 +83,11 @@ fn reconstruct_rollout_uses_recipient_projection_without_changing_sender_evidenc
                 "content": [{"type": "input_text", "text": text}],
             })
         );
-        assert!(!serde_json::to_string(&projected.history).unwrap().contains("opaque-test-payload"));
+        assert!(
+            !serde_json::to_string(&projected.history[0].item)
+                .unwrap()
+                .contains("opaque-test-payload")
+        );
     }
 
     let evidence = ContextManager::reconstruct_rollout(
