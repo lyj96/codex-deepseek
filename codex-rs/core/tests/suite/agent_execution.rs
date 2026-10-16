@@ -219,23 +219,30 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     Ok(())
 }
 
+#[test_case(Some("none"); "explicit_fresh")]
+#[test_case(None; "implicit_fresh_across_openai_provider")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provider_prefix_routes_child_to_external_responses_provider() -> Result<()> {
+async fn provider_prefix_routes_child_to_external_responses_provider(
+    fork_turns: Option<&str>,
+) -> Result<()> {
     const EXTERNAL_MODEL: &str = "deepseek-test";
 
     let root_server = start_mock_server().await;
     let external_server = start_mock_server().await;
+    let mut spawn_arguments = json!({
+        "message": FIRST_TASK,
+        "task_name": "external",
+        "model": EXTERNAL_MODEL,
+    });
+    if let Some(fork_turns) = fork_turns {
+        spawn_arguments["fork_turns"] = json!(fork_turns);
+    }
     mount_root_function_call(
         &root_server,
         FIRST_PROMPT,
         "external-spawn",
         "spawn_external_agent",
-        json!({
-            "message": FIRST_TASK,
-            "task_name": "external",
-            "model": EXTERNAL_MODEL,
-            "fork_turns": "none",
-        }),
+        spawn_arguments,
     )
     .await;
     let external_request = mount_sse_once(
@@ -252,8 +259,14 @@ async fn provider_prefix_routes_child_to_external_responses_provider() -> Result
     let mut builder = test_codex()
         .with_model("gpt-5.5")
         .with_config(move |config| {
-            config.features.enable(Feature::Collab).unwrap();
-            config.features.enable(Feature::MultiAgentV2).unwrap();
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should enable multi_agent");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should enable multi_agent_v2");
 
             let mut external_provider = config.model_provider.clone();
             external_provider.name = "DeepSeek test provider".to_string();
@@ -289,6 +302,14 @@ async fn provider_prefix_routes_child_to_external_responses_provider() -> Result
         .expect("external child thread should exist");
     let child = test.thread_manager.get_thread(child_id).await?;
     wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    let child_config = child.config_snapshot().await;
+    assert_eq!(
+        (
+            child_config.model_provider_id.as_str(),
+            child_config.model.as_str()
+        ),
+        ("deepseek", EXTERNAL_MODEL)
+    );
 
     let request = external_request.single_request();
     let body = request.body_json();
@@ -298,6 +319,11 @@ async fn provider_prefix_routes_child_to_external_responses_provider() -> Result
         item["type"] == "message" && item["role"] == "user" && item.to_string().contains(FIRST_TASK)
     }));
     assert!(!input.iter().any(|item| item["type"] == "agent_message"));
+    assert!(
+        !input
+            .iter()
+            .any(|item| { item["role"] == "user" && item.to_string().contains(FIRST_PROMPT) })
+    );
     assert!(
         !serde_json::to_string(input)
             .expect("serialize request input")
@@ -366,8 +392,14 @@ async fn child_turn_start_preserves_root_attribution() -> Result<()> {
                 headers: Default::default(),
                 tls: None,
             };
-            config.features.enable(Feature::Collab).unwrap();
-            config.features.enable(Feature::MultiAgentV2).unwrap();
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should enable multi_agent");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should enable multi_agent_v2");
         })
         .build_with_auto_env(&server)
         .await?;
@@ -795,8 +827,14 @@ async fn tree_shutdown_waits_for_children_without_affecting_other_roots(
     let test = test_codex()
         .with_model("gpt-5.6-sol")
         .with_config(move |config| {
-            config.features.enable(Feature::Collab).unwrap();
-            config.features.enable(Feature::MultiAgentV2).unwrap();
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should enable multi_agent");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should enable multi_agent_v2");
             if external_provider {
                 let mut provider = config.model_provider.clone();
                 provider.name = "External tree test provider".to_string();

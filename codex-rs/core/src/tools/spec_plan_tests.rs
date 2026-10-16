@@ -434,6 +434,7 @@ fn mcp_runtime(
     RegisteredTool {
         runtime: handler,
         exposure,
+        model_spec: None,
     }
 }
 
@@ -963,7 +964,6 @@ async fn request_user_input_stays_direct_in_code_mode_only() {
 async fn shell_family_registers_only_unified_exec_tools() {
     let plan = probe(|turn| {
         set_features(turn, &[Feature::ShellTool]);
-        set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
         update_turn_settings_for_test(turn, |settings| {
             Arc::make_mut(&mut settings.model_info).shell_type = ConfigShellToolType::UnifiedExec;
         });
@@ -987,7 +987,6 @@ async fn exec_command_guidance_follows_executor_platform_and_fallbacks() {
     ] {
         let plan = probe(|turn| {
             set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
-            set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
             update_turn_settings_for_test(turn, |settings| {
                 Arc::make_mut(&mut settings.model_info).shell_type =
                     ConfigShellToolType::UnifiedExec;
@@ -1082,40 +1081,6 @@ async fn dynamic_tools_cannot_reclaim_the_reserved_exec_command_name() {
         plan.namespace_function_names("client"),
         &["exec_command".to_string()]
     );
-}
-
-#[tokio::test]
-async fn shell_zsh_fork_keeps_unified_exec_available() {
-    let without_composition = probe(|turn| {
-        set_features(turn, &[Feature::ShellTool]);
-        set_feature(turn, Feature::ShellZshFork, /*enabled*/ true);
-        set_feature(turn, Feature::UnifiedExecZshFork, /*enabled*/ false);
-        update_turn_settings_for_test(turn, |settings| {
-            Arc::make_mut(&mut settings.model_info).shell_type = ConfigShellToolType::UnifiedExec;
-        });
-    })
-    .await;
-
-    without_composition.assert_visible_contains(&["exec_command", "write_stdin"]);
-    without_composition.assert_registered_contains(&["exec_command", "write_stdin"]);
-
-    let composed = probe(|turn| {
-        set_features(
-            turn,
-            &[
-                Feature::ShellTool,
-                Feature::ShellZshFork,
-                Feature::UnifiedExecZshFork,
-            ],
-        );
-        update_turn_settings_for_test(turn, |settings| {
-            Arc::make_mut(&mut settings.model_info).shell_type = ConfigShellToolType::UnifiedExec;
-        });
-    })
-    .await;
-
-    composed.assert_visible_contains(&["exec_command", "write_stdin"]);
-    composed.assert_registered_contains(&["exec_command", "write_stdin"]);
 }
 
 #[tokio::test]
@@ -1770,6 +1735,7 @@ async fn strict_namespace_ownership_requires_tool_namespace_inventory_opt_in() {
             RegisteredTool {
                 runtime: Arc::new(McpHandler::new(tool).expect("MCP tool spec should build")),
                 exposure,
+                model_spec: None,
             }
         })
         .collect();
@@ -1806,7 +1772,6 @@ async fn unified_tool_runtimes_preserve_source_order_and_collision_priority() {
     let plan = probe_with(
         |turn| {
             set_features(turn, &[Feature::ShellTool]);
-            set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
             update_turn_settings_for_test(turn, |settings| {
                 Arc::make_mut(&mut settings.model_info).shell_type =
                     ConfigShellToolType::UnifiedExec;
@@ -2066,6 +2031,7 @@ async fn strict_tool_collisions_allow_multiple_tools_in_one_namespace() {
                         McpHandler::new(undocumented_tool).expect("MCP tool spec should build"),
                     ),
                     exposure: ToolExposure::Direct,
+                    model_spec: None,
                 },
                 mcp_runtime("shared", "shared", "lookup", ToolExposure::Direct),
                 mcp_runtime("shared", "shared", "list", ToolExposure::Direct),
@@ -2105,6 +2071,7 @@ async fn relaxed_tool_collisions_preserve_first_nonempty_namespace_description()
             RegisteredTool {
                 runtime: Arc::new(McpHandler::new(tool).expect("MCP tool spec should build")),
                 exposure: ToolExposure::Direct,
+                model_spec: None,
             }
         };
         let plan = probe_with(
@@ -2925,16 +2892,21 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
     }
 }
 
-#[test_case::test_case(false, false; "inline_catalog_direct_messages")]
-#[test_case::test_case(true, false; "context_catalog_direct_messages")]
-#[test_case::test_case(false, true; "inline_catalog_channels_only")]
-#[test_case::test_case(true, true; "context_catalog_channels_only")]
+#[test_case::test_case(false, false, false; "inline_catalog_direct_messages")]
+#[test_case::test_case(true, false, false; "context_catalog_direct_messages")]
+#[test_case::test_case(false, true, false; "inline_catalog_channels_only")]
+#[test_case::test_case(true, true, false; "context_catalog_channels_only")]
+#[test_case::test_case(false, false, true; "inline_catalog_native_tools_hidden")]
+#[test_case::test_case(true, false, true; "context_catalog_native_tools_hidden")]
+#[test_case::test_case(false, true, true; "inline_catalog_all_messages_hidden")]
+#[test_case::test_case(true, true, true; "context_catalog_all_messages_hidden")]
 #[tokio::test]
 async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
     model_catalog_in_context: bool,
     disable_direct_message: bool,
+    disable_native_tools: bool,
 ) {
-    // The stable channels-only router requires an available board tool.
+    // Keep a board fixture available while testing channels-only schemas.
     let inputs = ToolPlanInputs {
         extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
             namespace: MULTI_AGENT_V2_NAMESPACE,
@@ -2966,6 +2938,7 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
             .expect("write external model catalog");
             update_config(turn, |config| {
                 config.multi_agent_v2.disable_direct_message = disable_direct_message;
+                config.multi_agent_v2.disable_native_tools = disable_native_tools;
                 config
                     .model_providers
                     .insert("deepseek".to_string(), config.model_provider.clone());
@@ -2980,7 +2953,9 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
         SEND_EXTERNAL_MESSAGE_TOOL_NAME,
         FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
     ] {
-        if disable_direct_message && tool_name != SPAWN_EXTERNAL_AGENT_TOOL_NAME {
+        if disable_native_tools
+            || (disable_direct_message && tool_name != SPAWN_EXTERNAL_AGENT_TOOL_NAME)
+        {
             plan.assert_visible_lacks(&[tool_name]);
             plan.assert_registered_lacks(&[tool_name]);
             continue;
@@ -3022,6 +2997,24 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
             );
             assert!(fork_turns_description.contains("encrypted OpenAI history cannot cross"));
         }
+    }
+
+    if disable_native_tools {
+        for tool_name in [
+            "spawn_agent",
+            "send_message",
+            "followup_task",
+            "wait_agent",
+            "interrupt_agent",
+            "list_agents",
+        ] {
+            let qualified_name = format!("{MULTI_AGENT_V2_NAMESPACE}.{tool_name}");
+            plan.assert_registered_lacks(&[&qualified_name]);
+        }
+        // This flag describes the model-visible management tools, not whether the V2 backend lives.
+        // Upstream intentionally returns no required management tool names when built-ins are hidden.
+        assert!(!plan.can_manage_children);
+        return;
     }
 
     let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {

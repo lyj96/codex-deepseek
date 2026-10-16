@@ -83,6 +83,12 @@ ignore = [
     { id = "RUSTSEC-2026-0119", reason = "hickory-proto v0.25.2 is pulled in via rama-dns/rama-tcp used by codex-network-proxy; no fixed rama release is available yet; remove when rama updates to hickory 0.26.1 or hickory-net" },
     { id = "RUSTSEC-2026-0194", reason = "quick-xml v0.39.4 remains via plist/syntect and wayland-scanner; plist does not exercise the affected APIs and wayland-scanner parses trusted build-time XML; remove when rust-plist#191 and wayland-rs#938 are released" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml v0.39.4 remains via plist/syntect and wayland-scanner; plist does not exercise the affected APIs and wayland-scanner parses trusted build-time XML; remove when rust-plist#191 and wayland-rs#938 are released" },
+    # User-approved 2026-10-16: these exact rustls notices do not block official stable syncs.
+    # Keep in sync with .cargo/audit.toml; remove once stable includes openai/codex#53996 or an equivalent fix.
+    { id = "RUSTSEC-2026-0346", reason = "official stable rustls 0.23.45 retained by explicit user decision; conditional session-store Debug secret exposure; risk tracked, not fixed" },
+    { id = "RUSTSEC-2026-0347", reason = "official stable rustls 0.23.45 retained by explicit user decision; ECH rejection with pre-handshake buffered data; risk tracked, not fixed" },
+    { id = "RUSTSEC-2026-0348", reason = "official stable rustls 0.23.45 retained by explicit user decision; nondefault Brotli certificate decompression allocation; risk tracked, not fixed" },
+    { id = "RUSTSEC-2026-0349", reason = "official stable rustls 0.23.45 retained by explicit user decision; unauthenticated key-share hint poisoning; risk tracked, not fixed" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
