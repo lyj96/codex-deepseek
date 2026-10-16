@@ -73,7 +73,7 @@ fn reconstruct_rollout_uses_recipient_projection_without_changing_sender_evidenc
                 communication.recipient, communication.author
             )
         } else {
-            communication.content.clone()
+            communication.content
         };
         assert_eq!(
             serde_json::to_value(&projected.history[0].item).unwrap(),
@@ -99,7 +99,10 @@ fn reconstruct_rollout_uses_recipient_projection_without_changing_sender_evidenc
     );
     // Sender authorization retains the structured source message regardless of recipient rendering.
     assert_eq!(evidence.history.len(), 1);
-    assert!(matches!(evidence.history[0].item, ResponseItem::AgentMessage { .. }));
+    assert!(matches!(
+        evidence.history[0].item,
+        ResponseItem::AgentMessage { .. }
+    ));
 }
 
 #[tokio::test]

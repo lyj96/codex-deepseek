@@ -3001,7 +3001,12 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
 
     if disable_native_tools {
         for tool_name in [
-            "spawn_agent", "send_message", "followup_task", "wait_agent", "interrupt_agent", "list_agents",
+            "spawn_agent",
+            "send_message",
+            "followup_task",
+            "wait_agent",
+            "interrupt_agent",
+            "list_agents",
         ] {
             let qualified_name = format!("{MULTI_AGENT_V2_NAMESPACE}.{tool_name}");
             plan.assert_registered_lacks(&[&qualified_name]);

@@ -203,6 +203,9 @@ jobs:
         run: |
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib session::rollout_reconstruction_tests
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent_communication
+      - name: Test stable access-program provider boundaries
+        working-directory: codex-rs
+        run: CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::cyber_access_program --no-tests fail
       - name: Test maintained YAML parser consumers
         working-directory: codex-rs
         run: |

@@ -133,7 +133,10 @@ async fn handle_spawn_agent(
         &call_id,
         ThreadSpawnRequest {
             task_name: args.task_name,
-            message: if matches!(source, crate::tools::context::ToolCallSource::DirectPlaintextMessage) {
+            message: if matches!(
+                source,
+                crate::tools::context::ToolCallSource::DirectPlaintextMessage
+            ) {
                 ThreadSpawnMessage::Plaintext(message)
             } else {
                 ThreadSpawnMessage::ProviderEncoded(message)
