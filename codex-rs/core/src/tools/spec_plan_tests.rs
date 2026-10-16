@@ -3006,7 +3006,9 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
             let qualified_name = format!("{MULTI_AGENT_V2_NAMESPACE}.{tool_name}");
             plan.assert_registered_lacks(&[&qualified_name]);
         }
-        assert!(plan.can_manage_children);
+        // This flag describes the model-visible management tools, not whether the V2 backend lives.
+        // Upstream intentionally returns no required management tool names when built-ins are hidden.
+        assert!(!plan.can_manage_children);
         return;
     }
 
