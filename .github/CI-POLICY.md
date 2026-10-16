@@ -48,3 +48,15 @@ Use standard free runners. Do not enable paid runners, delete tests, or change
 required checks merely to make a failing run green. Cancel superseded PR runs;
 retain failure evidence. Clean local build caches after verification, preserving
 source, configuration, secrets and the latest verified installed executable.
+
+## User-approved upstream dependency exception
+
+On 2026-10-16 the user explicitly authorized following official stable Codex
+updates without waiting for rustls fixes. RUSTSEC-2026-0346, RUSTSEC-2026-0347,
+RUSTSEC-2026-0348 and RUSTSEC-2026-0349 are the only additional exceptions.
+The audit and deny lists document them individually; dependency scans still run.
+These notices remain known risks, not fixed vulnerabilities or clean scan results.
+Keep the official stable dependency rather than backporting unreleased Codex
+changes. Remove these exceptions when official stable incorporates
+openai/codex#53996 or an equivalent fix. Other advisories, product defects,
+mandatory regressions and local platform preflights remain blocking.
