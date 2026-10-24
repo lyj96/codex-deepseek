@@ -93,6 +93,34 @@ pub(crate) async fn run_git_command_with_timeout_output(
     wait_for_git_command_with_timeout_output(child, process_tree, timeout_duration).await
 }
 
+/// Runs a synchronous Git operation with the same deadline and process-tree ownership as async Git.
+///
+/// An owned helper thread permits blocking plugin workers, including callers already inside a
+/// Tokio runtime, to use the shared pipe draining and Windows kill-on-close job implementation.
+/// This retains the shared containment compatibility fallback rather than introducing another
+/// unmanaged synchronous child-process implementation.
+pub fn run_git_command_with_timeout_output_blocking(
+    command: std::process::Command,
+    timeout_duration: Duration,
+) -> Option<Output> {
+    std::thread::Builder::new()
+        .name("git-process-owner".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok()?;
+            let mut command = Command::from(command);
+            runtime.block_on(run_git_command_with_timeout_output(
+                &mut command,
+                timeout_duration,
+            ))
+        })
+        .ok()?
+        .join()
+        .ok()?
+}
+
 #[cfg(test)]
 #[path = "git_process_tests.rs"]
 mod tests;

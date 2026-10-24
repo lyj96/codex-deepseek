@@ -3,7 +3,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
-use std::process::Stdio;
 use std::time::Duration;
 
 use self::http_client::StartupSyncHttpClient;
@@ -273,7 +272,7 @@ fn fetch_curated_plugins_commit_from(
         .args(["fetch", "--depth", "1", "--no-tags"])
         .arg(source)
         .arg(fetch_refspec);
-    let output = run_git_command_with_timeout(&mut command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
+    let output = run_git_command_with_timeout(command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
     ensure_git_success(&output, context)
 }
 
@@ -300,7 +299,7 @@ fn run_git_in_repo(
 ) -> Result<(), String> {
     let mut command = git_command(git_binary)?;
     command.arg("-C").arg(repo_path).args(args);
-    let output = run_git_command_with_timeout(&mut command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
+    let output = run_git_command_with_timeout(command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
     ensure_git_success(&output, context)
 }
 
@@ -616,7 +615,7 @@ fn git_ls_remote_head_sha(codex_home: &Path, git_binary: &Path) -> Result<String
         .arg(OPENAI_PLUGINS_GIT_URL)
         .arg("HEAD");
     let output = run_git_command_with_timeout(
-        &mut command,
+        command,
         "git ls-remote curated plugins repo",
         CURATED_PLUGINS_GIT_TIMEOUT,
     )?;
@@ -679,59 +678,14 @@ fn git_command(git_binary: &Path) -> Result<Command, String> {
 }
 
 fn run_git_command_with_timeout(
-    command: &mut Command,
+    command: Command,
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
-    codex_git_utils::ensure_safe_repository_discovery(command)
+    codex_git_utils::ensure_safe_repository_discovery(&command)
         .map_err(|err| format!("refused unsafe {context}: {err}"))?;
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| format!("failed to run {context}: {err}"))?;
-
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|err| format!("failed to wait for {context}: {err}"));
-            }
-            Ok(None) => {}
-            Err(err) => return Err(format!("failed to poll {context}: {err}")),
-        }
-
-        if start.elapsed() >= timeout {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    return child
-                        .wait_with_output()
-                        .map_err(|err| format!("failed to wait for {context}: {err}"));
-                }
-                Ok(None) => {}
-                Err(err) => return Err(format!("failed to poll {context}: {err}")),
-            }
-
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .map_err(|err| format!("failed to wait for {context} after timeout: {err}"))?;
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return if stderr.is_empty() {
-                Err(format!("{context} timed out after {}s", timeout.as_secs()))
-            } else {
-                Err(format!(
-                    "{context} timed out after {}s: {stderr}",
-                    timeout.as_secs()
-                ))
-            };
-        }
-
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    codex_git_utils::run_git_command_with_timeout_output_blocking(command, timeout)
+        .ok_or_else(|| format!("{context} failed or timed out after {}s", timeout.as_secs()))
 }
 
 fn ensure_git_success(output: &Output, context: &str) -> Result<(), String> {
@@ -1047,9 +1001,11 @@ fn extract_zipball_to_dir(bytes: &[u8], destination: &Path) -> Result<(), String
             .by_index(index)
             .map_err(|err| format!("failed to read curated plugins zip entry: {err}"))?;
         let Some(relative_path) = entry.enclosed_name() else {
+            let name = entry
+                .name()
+                .map_err(|err| format!("invalid curated plugins zip entry {index}: {err}"))?;
             return Err(format!(
-                "curated plugins zip entry `{}` escapes extraction root",
-                entry.name()
+                "curated plugins zip entry `{name}` escapes extraction root"
             ));
         };
 
@@ -1099,32 +1055,22 @@ fn extract_zipball_to_dir(bytes: &[u8], destination: &Path) -> Result<(), String
                 output_path.display()
             )
         })?;
-        apply_zip_permissions(&entry, &output_path)?;
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+
+            // zip strips setuid, setgid, and sticky bits from the archive's Unix mode.
+            output
+                .set_permissions(std::fs::Permissions::from_mode(mode))
+                .map_err(|err| {
+                    format!(
+                        "failed to set permissions on curated plugins file {}: {err}",
+                        output_path.display()
+                    )
+                })?;
+        }
     }
 
-    Ok(())
-}
-
-#[cfg(unix)]
-fn apply_zip_permissions(entry: &zip::read::ZipFile<'_>, output_path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let Some(mode) = entry.unix_mode() else {
-        return Ok(());
-    };
-    std::fs::set_permissions(output_path, std::fs::Permissions::from_mode(mode)).map_err(|err| {
-        format!(
-            "failed to set permissions on curated plugins file {}: {err}",
-            output_path.display()
-        )
-    })
-}
-
-#[cfg(not(unix))]
-fn apply_zip_permissions(
-    _entry: &zip::read::ZipFile<'_>,
-    _output_path: &Path,
-) -> Result<(), String> {
     Ok(())
 }
 

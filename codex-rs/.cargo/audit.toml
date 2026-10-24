@@ -11,10 +11,13 @@ ignore = [
     "RUSTSEC-2026-0119", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
     "RUSTSEC-2026-0194", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
     "RUSTSEC-2026-0195", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
-    # User-approved 2026-10-16: follow the official stable rustls dependency.
-    # Keep the risks recorded; remove when an official stable includes the fix (openai/codex#53996).
-    "RUSTSEC-2026-0346", # rustls 0.23.45; conditional session-store Debug secret exposure
-    "RUSTSEC-2026-0347", # rustls 0.23.45; ECH rejection and pre-handshake buffered data
-    "RUSTSEC-2026-0348", # rustls 0.23.45; nondefault Brotli certificate decompression allocation
-    "RUSTSEC-2026-0349", # rustls 0.23.45; unauthenticated key-share hint poisoning
+    # User approved 2026-10-24 for codex-v0.164.0-deepseek.1 only; risks unresolved.
+    # CI checks exact versions and release scope against the matching deny policy.
+    "RUSTSEC-2026-0370", # zvariant4.2.0 via zbus/tui; await official migration
+    "RUSTSEC-2026-0371", # zbus_names3.0.0 via zbus/tui; await official migration
+    "RUSTSEC-2026-0372", # zvariant_derive4.2.0 via zvariant/zbus/tui; await official migration
+    "RUSTSEC-2026-0374", # basic-toml0.1.10 via i18n-config/age/secrets; prior release block superseded for this release only
+    "RUSTSEC-2026-0385", # ctutils0.4.2 via digest/sqlx; timing risk remains
+    "RUSTSEC-2026-0386", # tokio1.52.3; unsoundness risk remains, scanner absence is not a fix
+    "RUSTSEC-2026-0387", # crypto-bigint0.5.5 via elliptic-curve/p256/aws-config; timing risk remains
 ]

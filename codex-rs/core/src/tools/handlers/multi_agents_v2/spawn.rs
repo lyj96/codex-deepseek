@@ -136,6 +136,7 @@ async fn handle_spawn_agent(
             message: if matches!(
                 source,
                 crate::tools::context::ToolCallSource::DirectPlaintextMessage
+                    | crate::tools::context::ToolCallSource::CodeMode { .. }
             ) {
                 ThreadSpawnMessage::Plaintext(message)
             } else {

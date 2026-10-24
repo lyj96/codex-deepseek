@@ -1,3 +1,4 @@
+use super::run_git_command_with_timeout_output_blocking;
 use super::spawn_git_command;
 use super::wait_for_git_command_with_timeout_output;
 use pretty_assertions::assert_eq;
@@ -131,4 +132,105 @@ async fn timed_out_exited_git_wrapper_does_not_leave_child_process_running() {
         GitWrapperLifetime::ExitBeforeTimeout,
     )
     .await;
+}
+
+#[tokio::test]
+async fn blocking_git_preserves_output_inside_current_thread_runtime() {
+    #[cfg(unix)]
+    let mut command = std::process::Command::new("/bin/sh");
+    #[cfg(unix)]
+    command.args(["-c", "printf 'owned-git-output\\n'"]);
+    #[cfg(windows)]
+    let mut command = codex_utils_process::background_command("cmd.exe");
+    #[cfg(windows)]
+    command.args(["/C", "echo owned-git-output"]);
+    let output =
+        run_git_command_with_timeout_output_blocking(command, Duration::from_secs(/*secs*/ 10))
+            .expect("blocking Git operation should complete without reentering the caller runtime");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .expect("UTF-8 test output")
+            .trim(),
+        "owned-git-output"
+    );
+    assert_eq!(output.stderr, Vec::<u8>::new());
+}
+
+#[cfg(windows)]
+#[test]
+fn blocking_owner_exit_terminates_git_process_tree() {
+    const TEST_NAME: &str = "git_process::tests::blocking_owner_exit_terminates_git_process_tree";
+    const PHASE: &str = "CODEX_TEST_BLOCKING_GIT_OWNER_PHASE";
+    if std::env::var(PHASE).as_deref() == Ok("owner") {
+        let ready = std::path::PathBuf::from(
+            std::env::var_os("CHILD_READY_FILE").expect("private child readiness path"),
+        );
+        let (completed, completion) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut command = codex_utils_process::background_command("powershell.exe");
+            // Avoid a synthetic PowerShell -Command argument being parsed as Git's -C option.
+            command.args(["-NoProfile", "-NonInteractive", "-File"]);
+            command.arg(std::env::var_os("CHILD_SCRIPT_FILE").expect("private child script"));
+            let output = run_git_command_with_timeout_output_blocking(
+                command,
+                Duration::from_secs(/*secs*/ 60),
+            );
+            let _ = completed.send(output);
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(/*secs*/ 30);
+        while !ready.exists() {
+            if let Ok(output) = completion.try_recv() {
+                panic!("owned Git fixture exited before readiness: {output:?}");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "owned Git child did not become ready"
+            );
+            std::thread::sleep(Duration::from_millis(/*millis*/ 25));
+        }
+        // Model application exit while a synchronous plugin worker still owns Git.
+        std::process::exit(/*code*/ 0);
+    }
+
+    let temp = tempfile::tempdir().expect("private process-lifecycle fixture");
+    let child_pid = temp.path().join("child.pid");
+    let child_ready = temp.path().join("ready");
+    let release_child = temp.path().join("release");
+    let child_survived = temp.path().join("survived");
+    let child_script = temp.path().join("child.ps1");
+    std::fs::write(
+        &child_script,
+        "[System.IO.File]::WriteAllText($env:CHILD_PID_FILE, [string]$PID); [System.IO.File]::WriteAllText($env:CHILD_READY_FILE, 'ready'); while (-not (Test-Path $env:RELEASE_CHILD_FILE)) { Start-Sleep -Milliseconds 25 }; [System.IO.File]::WriteAllText($env:CHILD_SURVIVED_FILE, 'survived'); Start-Sleep -Seconds 60",
+    )
+    .expect("write private process-lifecycle script");
+    let output = codex_utils_process::background_command(
+        std::env::current_exe().expect("current test executable"),
+    )
+    .args(["--exact", TEST_NAME, "--nocapture"])
+    .env(PHASE, "owner")
+    .env("CHILD_PID_FILE", &child_pid)
+    .env("CHILD_READY_FILE", &child_ready)
+    .env("RELEASE_CHILD_FILE", &release_child)
+    .env("CHILD_SURVIVED_FILE", &child_survived)
+    .env("CHILD_SCRIPT_FILE", &child_script)
+    .output()
+    .expect("run isolated application-owner fixture");
+    assert!(output.status.success(), "owner fixture failed: {output:?}");
+    assert!(
+        child_ready.exists(),
+        "the owned child must actually have started"
+    );
+    std::fs::write(release_child, "release").expect("release only the private owned child");
+    std::thread::sleep(Duration::from_secs(/*secs*/ 3));
+    if child_survived.exists() {
+        let pid = std::fs::read_to_string(child_pid).expect("private owned child PID");
+        let _ = codex_utils_process::background_command("taskkill.exe")
+            .args(["/PID", pid.trim(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        panic!("owned Git child survived application-owner exit");
+    }
 }

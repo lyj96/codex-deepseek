@@ -4,19 +4,116 @@ name: extended-ci
 # A failed extended run remains visible; it is never converted into success.
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Full matrix, three identified regressions, or only descriptor and rollout prerequisites
+        type: choice
+        options:
+          - full
+          - focused-compatibility
+          - focused-descriptor-rollout
+        default: full
 
 permissions:
   contents: read
 
 jobs:
   bazel:
+    if: ${{ inputs.scope == 'full' }}
     uses: ./.github/workflows/bazel.yml
     secrets: inherit
   rust:
+    if: ${{ inputs.scope == 'full' }}
     uses: ./.github/workflows/rust-ci.yml
     with:
       run_bazel: true
     secrets: inherit
   sdk:
+    if: ${{ inputs.scope == 'full' }}
     uses: ./.github/workflows/sdk.yml
     secrets: inherit
+
+  focused-compatibility:
+    if: ${{ inputs.scope != 'full' }}
+    name: Focused compatibility - ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    environment:
+      name: bazel
+      deployment: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: ${{ matrix.target }}
+          cache-scope: bazel-focused-compatibility
+      - name: Test alternate-group rollout preservation
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          # This case needs the runner's real supplementary groups. Bazel's
+          # Linux user namespace maps only one GID; retain the filesystem
+          # sandbox for this TestRunner without changing build isolation.
+          id -G
+          cat /proc/self/gid_map
+          log="$RUNNER_TEMP/rollout-alternate-group.log"
+          ./.github/scripts/run-bazel-ci.sh --print-failed-action-summary --print-failed-test-logs -- \
+            test --jobs=2 --local_test_jobs=1 --test_output=streamed \
+            --strategy=TestRunner=processwrapper-sandbox \
+            --test_arg=compression::tests::worker_preserves_alternate_group_through_materialization \
+            --test_arg=--nocapture -- \
+            //codex-rs/rollout:rollout-unit-tests 2>&1 | tee "$log"
+          if grep -Fq 'skipping ownership regression' "$log"; then
+            echo 'Alternate-group ownership assertions did not run' >&2
+            exit 1
+          fi
+      - name: Test pinned PowerShell under Wine with a PTY
+        if: always() && !cancelled() && inputs.scope == 'focused-compatibility' && steps.prepare_bazel.outcome == 'success' && matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          ./.github/scripts/run-bazel-ci.sh --print-failed-action-summary --print-failed-test-logs -- \
+            test --jobs=2 --local_test_jobs=1 --test_output=streamed \
+            --test_arg=tests::pinned_powershell_runs_under_wine_with_a_pty \
+            --test_arg=--nocapture -- \
+            //bazel/rules/testing/wine:wine-test-support-unit-tests
+      - name: Prepare hosted macOS descriptor-test resource ceiling
+        if: matrix.target == 'aarch64-apple-darwin'
+        env:
+          CODEX_DESCRIPTOR_TEST_HOSTED: ${{ runner.environment }}
+        run: bash .github/scripts/macos-descriptor-test-limit.sh prepare
+      - name: Test high-descriptor compatibility fallback
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          ./.github/scripts/run-bazel-ci.sh --print-failed-action-summary --print-failed-test-logs -- \
+            test --jobs=2 --local_test_jobs=1 --test_output=streamed \
+            --test_arg=child_command::descriptor_tests::high_stdio_descriptors_use_compatible_fallback \
+            --test_arg=--nocapture -- \
+            //codex-rs/utils/pty:pty-unit-tests
+      - name: Restore hosted macOS descriptor-test resource ceiling
+        if: always() && matrix.target == 'aarch64-apple-darwin' && env.CODEX_DESCRIPTOR_TEST_ORIGINAL_MAXFILES != ''
+        env:
+          CODEX_DESCRIPTOR_TEST_HOSTED: ${{ runner.environment }}
+        run: bash .github/scripts/macos-descriptor-test-limit.sh restore
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
