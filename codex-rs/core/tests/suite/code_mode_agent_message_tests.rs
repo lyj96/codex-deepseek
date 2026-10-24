@@ -27,8 +27,10 @@ use wiremock::matchers::header;
 async fn code_mode_spawn_delivers_plaintext(external_provider: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let code_mode_host_program = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
     let server = start_mock_server().await;
     let test = test_codex()
+        .with_code_mode_host_program(code_mode_host_program)
         .with_model("gpt-5.6-sol")
         .with_model_info_override("gpt-5.6-sol", |model| {
             model.tool_mode = Some(ToolMode::CodeMode);

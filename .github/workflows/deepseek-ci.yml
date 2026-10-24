@@ -175,6 +175,11 @@ jobs:
       - name: Check formatting
         working-directory: codex-rs
         run: cargo fmt --all -- --check
+      - name: Build agent runtime test helpers
+        working-directory: codex-rs
+        run: >-
+          CARGO_BUILD_JOBS=1 cargo build --locked
+          --bin codex-code-mode-host --bin codex-exec --bin exec-server
       - name: Test external provider routing
         working-directory: codex-rs
         run: |
