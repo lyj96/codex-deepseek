@@ -17,6 +17,11 @@ jobs:
 
       - uses: ./.github/actions/setup-ci
 
+      - name: Validate one-release advisory approval
+        run: |
+          python3 -m unittest discover -s ../.github/scripts -p 'test_advisory_exceptions.py'
+          python3 ../.github/scripts/check_advisory_exceptions.py
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
 

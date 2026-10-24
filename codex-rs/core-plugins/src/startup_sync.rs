@@ -3,7 +3,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
-use std::process::Stdio;
 use std::time::Duration;
 
 use self::http_client::StartupSyncHttpClient;
@@ -273,7 +272,7 @@ fn fetch_curated_plugins_commit_from(
         .args(["fetch", "--depth", "1", "--no-tags"])
         .arg(source)
         .arg(fetch_refspec);
-    let output = run_git_command_with_timeout(&mut command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
+    let output = run_git_command_with_timeout(command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
     ensure_git_success(&output, context)
 }
 
@@ -300,7 +299,7 @@ fn run_git_in_repo(
 ) -> Result<(), String> {
     let mut command = git_command(git_binary)?;
     command.arg("-C").arg(repo_path).args(args);
-    let output = run_git_command_with_timeout(&mut command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
+    let output = run_git_command_with_timeout(command, context, CURATED_PLUGINS_GIT_TIMEOUT)?;
     ensure_git_success(&output, context)
 }
 
@@ -616,7 +615,7 @@ fn git_ls_remote_head_sha(codex_home: &Path, git_binary: &Path) -> Result<String
         .arg(OPENAI_PLUGINS_GIT_URL)
         .arg("HEAD");
     let output = run_git_command_with_timeout(
-        &mut command,
+        command,
         "git ls-remote curated plugins repo",
         CURATED_PLUGINS_GIT_TIMEOUT,
     )?;
@@ -679,59 +678,14 @@ fn git_command(git_binary: &Path) -> Result<Command, String> {
 }
 
 fn run_git_command_with_timeout(
-    command: &mut Command,
+    command: Command,
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
-    codex_git_utils::ensure_safe_repository_discovery(command)
+    codex_git_utils::ensure_safe_repository_discovery(&command)
         .map_err(|err| format!("refused unsafe {context}: {err}"))?;
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| format!("failed to run {context}: {err}"))?;
-
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|err| format!("failed to wait for {context}: {err}"));
-            }
-            Ok(None) => {}
-            Err(err) => return Err(format!("failed to poll {context}: {err}")),
-        }
-
-        if start.elapsed() >= timeout {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    return child
-                        .wait_with_output()
-                        .map_err(|err| format!("failed to wait for {context}: {err}"));
-                }
-                Ok(None) => {}
-                Err(err) => return Err(format!("failed to poll {context}: {err}")),
-            }
-
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .map_err(|err| format!("failed to wait for {context} after timeout: {err}"))?;
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return if stderr.is_empty() {
-                Err(format!("{context} timed out after {}s", timeout.as_secs()))
-            } else {
-                Err(format!(
-                    "{context} timed out after {}s: {stderr}",
-                    timeout.as_secs()
-                ))
-            };
-        }
-
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    codex_git_utils::run_git_command_with_timeout_output_blocking(command, timeout)
+        .ok_or_else(|| format!("{context} failed or timed out after {}s", timeout.as_secs()))
 }
 
 fn ensure_git_success(output: &Output, context: &str) -> Result<(), String> {

@@ -58,10 +58,24 @@ version changes do not waive other findings or replace fresh dependency scans.
 
 Keep the maintained `serde_norway` workspace alias rather than reintroducing
 `serde_yaml`/`unsafe-libyaml`. Do not copy upstream advisory ignores into the
-Fork without approval: RUSTSEC-2026-0370/0371/0372 remain unapproved, and the
-user chose to await an official migration for RUSTSEC-2026-0374. The official
-stable ignores are not evidence that those packages migrated. Newly reported
-RUSTSEC-2026-0385/0386/0387 also have no exception. Scans must continue to report
-unresolved findings; source integration does not authorize merge or release
-while unwaived gates fail. Product defects, mandatory regressions and fresh
-local platform preflights remain blocking.
+Fork without approval. Before the one-release decision below,
+RUSTSEC-2026-0370/0371/0372 were unapproved and the user had chosen to await an
+official migration for RUSTSEC-2026-0374.
+The official stable ignores are not evidence that those packages migrated.
+
+On 2026-10-24 the user explicitly approved **only the 0.164.0 release** retaining
+RUSTSEC-2026-0370/0371/0372/0374/0385/0386/0387, with every other gate unchanged.
+This supersedes the earlier release block, including 0374, for
+`codex-v0.164.0-deepseek.1` only. Risks remain unresolved; no independent
+dependency upgrade or unreleased Codex backport is authorized. Matching narrow
+audit/deny exceptions record the actual versions, dependency paths, upstream
+tracking, and removal condition in `advisory-exceptions-0.164.0.json`.
+`check_advisory_exceptions.py` rejects another Cargo base, another native tag,
+changed affected versions, or mismatched approval/policy files. Remove/review
+these exceptions before another release or when official dependencies fix them.
+
+Scans still actually run and report temporary exceptions; a scan accepted under
+these exceptions is not a vulnerability fix or a no-warning claim. New findings,
+product defects, mandatory regressions, and fresh local platform preflights
+remain blocking. Do not weaken Fence, test assertions, leaked-handle policy,
+timeouts, required-job handling, or runner permissions to force a green result.

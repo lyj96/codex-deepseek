@@ -326,6 +326,35 @@ jobs:
           --bin codex --bin codex-app-server --bin codex-code-mode-host
           --bin codex-command-runner --bin codex-windows-sandbox-setup
 
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: nextest
+          version: 0.9.149
+      - name: Test Windows Git ownership and Provider shutdown
+        working-directory: codex-rs
+        shell: pwsh
+        env:
+          LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "2"
+          CARGO_TERM_COLOR: never
+        run: |
+          $env:CODEX_HOME = Join-Path $env:RUNNER_TEMP 'provider-shutdown-home'
+          New-Item -ItemType Directory -Path $env:CODEX_HOME -Force | Out-Null
+          foreach ($package in @('codex-git-utils', 'codex-core-plugins')) {
+            just test -p $package --lib --locked --target x86_64-pc-windows-msvc --retries 0 --no-tests fail
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $log = Join-Path $env:RUNNER_TEMP 'tui-provider-shutdown.log'
+          just test -p codex-tui --lib --locked --target x86_64-pc-windows-msvc `
+            -E 'test(=app_server_session::provider_selection_tests::required_provider_overrides_oss_history_selection) | test(=app_server_session::provider_selection_tests::starts_and_forks_use_server_provider_unless_explicitly_selected)' `
+            --test-threads 1 --retries 0 --success-output final --no-tests fail 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Select-String -LiteralPath $log -Pattern '^\s*LEAK\s|\b[1-9][0-9]* leaky\b' -Quiet) {
+            throw 'Provider shutdown still leaves a leaked process or handle'
+          }
+
   macos-release-compile:
     runs-on: macos-14
     timeout-minutes: 90
@@ -351,6 +380,18 @@ jobs:
         run: >-
           cargo check --locked --target aarch64-apple-darwin
           --bin codex --bin codex-app-server --bin codex-code-mode-host
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: nextest
+          version: 0.9.149
+      - name: Test macOS descriptor compatibility
+        working-directory: codex-rs
+        env:
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "2"
+        run: just test -p codex-utils-pty --lib --locked --target aarch64-apple-darwin --retries 0 --no-tests fail
 
   linux-musl-bwrap-smoke:
     runs-on: ubuntu-24.04
