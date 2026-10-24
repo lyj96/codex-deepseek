@@ -49,14 +49,19 @@ required checks merely to make a failing run green. Cancel superseded PR runs;
 retain failure evidence. Clean local build caches after verification, preserving
 source, configuration, secrets and the latest verified installed executable.
 
-## User-approved upstream dependency exception
+## Upstream dependency policy
 
-On 2026-10-16 the user explicitly authorized following official stable Codex
-updates without waiting for rustls fixes. RUSTSEC-2026-0346, RUSTSEC-2026-0347,
-RUSTSEC-2026-0348 and RUSTSEC-2026-0349 are the only additional exceptions.
-The audit and deny lists document them individually; dependency scans still run.
-These notices remain known risks, not fixed vulnerabilities or clean scan results.
-Keep the official stable dependency rather than backporting unreleased Codex
-changes. Remove these exceptions when official stable incorporates
-openai/codex#53996 or an equivalent fix. Other advisories, product defects,
-mandatory regressions and local platform preflights remain blocking.
+The four temporary rustls exceptions authorized on 2026-10-16 are removed for
+official stable 0.164.0, which incorporates rustls 0.23.46. Its webpki and root
+certificate packages also incorporate the official stable fixes. These actual
+version changes do not waive other findings or replace fresh dependency scans.
+
+Keep the maintained `serde_norway` workspace alias rather than reintroducing
+`serde_yaml`/`unsafe-libyaml`. Do not copy upstream advisory ignores into the
+Fork without approval: RUSTSEC-2026-0370/0371/0372 remain unapproved, and the
+user chose to await an official migration for RUSTSEC-2026-0374. The official
+stable ignores are not evidence that those packages migrated. Newly reported
+RUSTSEC-2026-0385/0386/0387 also have no exception. Scans must continue to report
+unresolved findings; source integration does not authorize merge or release
+while unwaived gates fail. Product defects, mandatory regressions and fresh
+local platform preflights remain blocking.

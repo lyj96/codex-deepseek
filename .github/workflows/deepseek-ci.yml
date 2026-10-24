@@ -163,7 +163,7 @@ jobs:
       - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:
-          toolchain: 1.95.0
+          toolchain: 1.99.1
           components: rustfmt
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
         with:
@@ -182,7 +182,7 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::thread_settings_update
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::account::
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::model_list
-          CARGO_BUILD_JOBS=1 just test -p codex-models-manager --lib openai_manager_prefers_config_catalog_over_remote_catalog
+          CARGO_BUILD_JOBS=1 just test -p codex-models-manager --lib --no-tests fail
           CARGO_BUILD_JOBS=1 just test -p codex-model-provider --lib
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib model_catalog
@@ -195,6 +195,8 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_provider_tools_use_plaintext_message_schemas
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all idle_mail_survives_eviction_and_preserves_followup_order --no-tests fail
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all code_mode_spawn_delivers_plaintext --no-tests fail
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all spawn_inherits_first_pending_owner_configuration
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all board_unsubscribe_survives_post_and_resume_until_resubscribed
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all tree_shutdown
@@ -302,7 +304,7 @@ jobs:
           node-version: 24
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:
-          toolchain: 1.95.0
+          toolchain: 1.99.1
           targets: x86_64-pc-windows-msvc
       - uses: ./.github/actions/setup-rusty-v8
         with:
@@ -334,7 +336,7 @@ jobs:
           node-version: 24
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:
-          toolchain: 1.95.0
+          toolchain: 1.99.1
           targets: aarch64-apple-darwin
       - uses: ./.github/actions/setup-rusty-v8
         with:
@@ -354,7 +356,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:
-          toolchain: 1.95.0
+          toolchain: 1.99.1
           targets: x86_64-unknown-linux-musl
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:

@@ -92,7 +92,14 @@ pub fn ensure_safe_repository_discovery(command: &Command) -> io::Result<()> {
                 ))
             }
         }
-        Err(gix::discover::upwards::Error::NoGitRepository { .. }) => Ok(()),
+        Err(err)
+            if matches!(
+                err.downcast_any_ref::<gix::discover::upwards::Error>(),
+                Some(gix::discover::upwards::Error::NoGitRepository { .. })
+            ) =>
+        {
+            Ok(())
+        }
         Err(err) => Err(io::Error::other(format!(
             "unsafe Git repository discovery: {err}"
         ))),

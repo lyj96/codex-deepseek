@@ -138,7 +138,7 @@ jobs:
           node-version: 24
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:
-          toolchain: 1.95.0
+          toolchain: 1.99.1
           targets: ${{ matrix.target }}
       - name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8

@@ -5,17 +5,39 @@ use crate::suite::settings_commits::COMMITTED_MODEL;
 use crate::suite::settings_commits::PauseAfterCommit;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::MessageLifecycleContributor;
+use codex_extension_api::MessageLifecycleInput;
+use codex_protocol::ResponseItemId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::Op;
 use core_test_support::ThreadIdle;
 use pretty_assertions::assert_eq;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc;
 use tokio::sync::oneshot;
 
+#[derive(Default)]
+struct Messages(Mutex<HashSet<ResponseItemId>>);
+impl MessageLifecycleContributor for Messages {
+    fn on_publish(&self, input: &MessageLifecycleInput) {
+        let mut pending = self.0.lock().expect("messages lock");
+        assert!(pending.insert(input.message_id.clone()));
+    }
+    fn on_consumed(&self, input: &MessageLifecycleInput, _recipient: ThreadId) {
+        let mut pending = self.0.lock().expect("messages lock");
+        assert!(pending.remove(&input.message_id));
+    }
+}
+
+#[test_case::test_case(false; "openai")]
+#[test_case::test_case(true; "custom_provider")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()> {
+async fn idle_mail_survives_eviction_and_preserves_followup_order(
+    custom_provider: bool,
+) -> Result<()> {
     const MAIL: &str = "Keep this note for later";
     const LATE_MAIL: &str = "Another note while unloaded";
     const FOLLOWUP: &str = "Read the pending note";
@@ -37,14 +59,32 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
         gate: Mutex::new(Some((entered_tx, release_rx))),
     }));
     extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let messages = Arc::new(Messages::default());
+    extensions.message_lifecycle_contributor(messages.clone());
     let test = test_codex()
         .with_model("gpt-5.6-sol")
         .with_extensions(Arc::new(extensions.build()))
-        .with_config(|config| {
-            config.features.enable(Feature::Collab).unwrap();
-            config.features.enable(Feature::MultiAgentV2).unwrap();
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("enable collaboration in mailbox fixture");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("enable multi-agent v2 in mailbox fixture");
             config.multi_agent_v2.max_concurrent_threads_per_session = 2;
             config.multi_agent_v2.hide_spawn_agent_metadata = true;
+            if custom_provider {
+                config.model_provider_id = "mailbox-custom".to_string();
+                config.model_provider.requires_openai_auth = false;
+                config.model_provider.env_key = Some("PATH".to_string());
+                config.model_providers.insert(
+                    config.model_provider_id.clone(),
+                    config.model_provider.clone(),
+                );
+                config.model_catalog = Some(bundled_models_response().expect("test catalog"));
+            }
         })
         .build_with_auto_env(&server)
         .await?;
@@ -106,6 +146,8 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
     ThreadIdle::wait(&test.codex).await;
     assert!(test.thread_manager.get_thread(first_id).await.is_err());
 
+    let retained = messages.0.lock().expect("messages lock").clone();
+    assert_eq!(retained.len(), 2);
     // Reload without starting a turn, then hold dispatch while both tools submit.
     // The older queued notes must precede the follow-up, and the newer note must follow it.
     test.thread_manager
@@ -130,10 +172,18 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
         json!({ "target": "first", "message": FOLLOWUP }),
     )
     .await;
+    let (at_sampling, pending_at_sampling) = mpsc::channel();
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            body_contains(request, FOLLOWUP) && !has_function_call_output(request, "followup")
+        move |request: &wiremock::Request| {
+            let matches =
+                body_contains(request, FOLLOWUP) && !has_function_call_output(request, "followup");
+            if matches {
+                at_sampling
+                    .send(messages.0.lock().expect("messages lock").clone())
+                    .expect("capture pending messages before sampling");
+            }
+            matches
         },
         sse(vec![
             ev_response_created("worker-wait"),
@@ -171,12 +221,30 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
     release_tx.send(())?;
     wait_for_event(&resumed, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     ThreadIdle::wait(&resumed).await;
+    assert!(
+        pending_at_sampling.try_recv()?.is_disjoint(&retained),
+        "both retained publications must be consumed before the first resumed sample"
+    );
     let request = delivered
         .requests()
         .into_iter()
         .find(|request| request.function_call_output_text("wait-note").is_some())
         .expect("worker continuation after waiting for mail");
-    let messages = request.inputs_of_type("agent_message");
+    let messages = if custom_provider {
+        assert!(request.inputs_of_type("agent_message").is_empty());
+        assert!(
+            !request.body_json()["input"]
+                .to_string()
+                .contains("encrypted_content")
+        );
+        request
+            .inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item["role"] == "user")
+            .collect::<Vec<_>>()
+    } else {
+        request.inputs_of_type("agent_message")
+    };
     let expected = [MAIL, LATE_MAIL, FOLLOWUP, AFTER_FOLLOWUP];
     let received = messages
         .iter()
