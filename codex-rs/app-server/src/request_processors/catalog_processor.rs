@@ -296,13 +296,12 @@ impl CatalogRequestProcessor {
         let presets = self
             .model_catalog
             .list_models_from_snapshot(
-                config,
+                Arc::clone(&config),
                 models_manager,
                 codex_models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await
             .map_err(|err| config_load_error(&err))?;
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let models = supported_models(presets, &config, include_hidden.unwrap_or(false));
         let total = models.len();
 

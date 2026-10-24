@@ -269,3 +269,75 @@ async fn model_list_preserves_invalid_startup_config_fallback() -> Result<()> {
     assert!(!list_models(&mut server).await?.data.is_empty());
     Ok(())
 }
+
+/// Managed aliases keep one default on the current provider, even when another
+/// provider exposes the same API model. Existing catalog IDs are not duplicated.
+#[test_case("gateway-model"; "existing_catalog_id")]
+#[test_case("gateway-public"; "public_alias")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_list_defaults_to_current_provider_public_model(public_model: &str) -> Result<()> {
+    let home = TempDir::new()?;
+    let mock = MockServer::start().await;
+    let catalog_dir = home.path().join("model-catalogs");
+    std::fs::create_dir(&catalog_dir)?;
+    let catalog_bytes = serde_json::to_vec(&catalog("gateway-model")?)?;
+    for provider in ["gateway", "other"] {
+        std::fs::write(catalog_dir.join(format!("{provider}.json")), &catalog_bytes)?;
+    }
+    std::fs::write(
+        catalog_dir.join("routes.json"),
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "models": {
+                (public_model): {"provider": "gateway", "api_model": "gateway-model"},
+                "other-public": {"provider": "other", "api_model": "gateway-model"}
+            }
+        }))?,
+    )?;
+    let uri = mock.uri();
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"
+model_provider = "gateway"
+model = "gateway-model"
+[model_providers.gateway]
+name = "Gateway"
+base_url = "{uri}/v1"
+requires_openai_auth = false
+[model_providers.other]
+name = "Other"
+base_url = "{uri}/v1"
+requires_openai_auth = false
+"#
+        ),
+    )?;
+    let mut server = TestAppServer::builder()
+        .with_mock_chatgpt_backend()
+        .with_codex_home(home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None), ("CODEX_API_KEY", None)])
+        .build_initialized()
+        .await?;
+    let response = list_models(&mut server).await?;
+    let mut expected = vec![("gateway-model", public_model == "gateway-model")];
+    if public_model != "gateway-model" {
+        expected.push((public_model, true));
+    }
+    expected.push(("other-public", false));
+    assert_eq!(
+        response
+            .data
+            .iter()
+            .map(|model| (model.id.as_str(), model.is_default))
+            .collect::<Vec<_>>(),
+        expected,
+    );
+    assert_eq!(response.next_cursor, None);
+    assert!(
+        mock.received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty()
+    );
+    Ok(())
+}

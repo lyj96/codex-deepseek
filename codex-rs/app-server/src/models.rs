@@ -11,18 +11,28 @@ pub fn supported_models(
     config: &Config,
     include_hidden: bool,
 ) -> Vec<Model> {
-    if !config.model_provider.is_openai() {
+    let configured_models = config.configured_external_models();
+    let default_model_id = configured_models
+        .iter()
+        .find(|model| {
+            model.provider_id == config.model_provider_id
+                && config.model.as_deref() == Some(model.api_model.as_str())
+        })
+        .map(|model| model.preset.id.clone());
+    // Retain the catalog's default unless a configured route supplies the
+    // selected provider/model's public ID. A custom provider can use native
+    // catalog discovery without having any managed external routes.
+    if let Some(default_model_id) = &default_model_id {
         for preset in &mut presets {
-            preset.is_default = false;
+            preset.is_default = &preset.id == default_model_id;
         }
     }
-    for external in config.configured_external_models() {
+    for external in configured_models {
         if presets.iter().any(|preset| preset.id == external.preset.id) {
             continue;
         }
         let mut preset = external.preset;
-        preset.is_default = external.provider_id == config.model_provider_id
-            && config.model.as_deref() == Some(external.api_model.as_str());
+        preset.is_default = default_model_id.as_deref() == Some(preset.id.as_str());
         presets.push(preset);
     }
     presets
