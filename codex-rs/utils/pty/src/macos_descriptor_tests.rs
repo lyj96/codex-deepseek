@@ -163,22 +163,21 @@ async fn high_stdio_descriptors_use_compatible_fallback() -> anyhow::Result<()> 
     let raw = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD, 3) };
     anyhow::ensure!(raw >= 3, "{}", io::Error::last_os_error());
     let sentinel = unsafe { OwnedFd::from_raw_fd(raw) };
-    // Reach the same native file-action boundary without exhausting the host's
-    // open-file count while allocating ten thousand unrelated descriptors.
-    const DARWIN_OPEN_MAX: libc::c_int = 10_240;
-    // SAFETY: Duplicate this live file into one newly owned high descriptor.
-    let high_raw = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD, DARWIN_OPEN_MAX) };
-    anyhow::ensure!(
-        high_raw >= DARWIN_OPEN_MAX,
-        "{}",
-        io::Error::last_os_error()
-    );
-    // SAFETY: fcntl returned a newly owned descriptor.
-    let high_stdin = unsafe { OwnedFd::from_raw_fd(high_raw) };
+    let mut occupied = Vec::new();
+    loop {
+        let descriptor = file.try_clone()?;
+        let raw = descriptor.as_raw_fd();
+        occupied.push(descriptor);
+        // Native setup clones stdio into the lowest available descriptor. Keep
+        // every lower slot occupied so the real spawn action reaches Darwin's
+        // OPEN_MAX boundary, not merely a high caller-owned descriptor.
+        if raw >= 10_240 {
+            break;
+        }
+    }
+
     let mut strict = Command::new("/usr/bin/true");
-    strict
-        .stdin(ChildStdin::File(high_stdin))
-        .fallback(SpawnFallback::ReturnError);
+    strict.fallback(SpawnFallback::ReturnError);
     let error = strict
         .spawn()
         .err()
@@ -186,35 +185,25 @@ async fn high_stdio_descriptors_use_compatible_fallback() -> anyhow::Result<()> 
     assert_eq!(error.raw_os_error(), Some(libc::EBADF));
 
     for mode in [ProcessMode::NewGroup, ProcessMode::NewSession] {
-        let (parent, socket) = UnixStream::pair()?;
-        parent.set_nonblocking(true)?;
-        let mut parent = tokio::net::UnixStream::from_std(parent)?;
-        // SAFETY: Keep this socket open while duplicating it into a new high fd.
-        let high_raw = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_DUPFD, DARWIN_OPEN_MAX) };
-        anyhow::ensure!(
-            high_raw >= DARWIN_OPEN_MAX,
-            "{}",
-            io::Error::last_os_error()
-        );
-        // SAFETY: fcntl returned a newly owned descriptor for the child's stdin.
-        let high_stdin = unsafe { OwnedFd::from_raw_fd(high_raw) };
         let mut command = Command::new("/bin/sh");
         command
             .args(["-c", &format!(
                 "test ! -e /dev/fd/{} || exit 99; IFS= read -r line; printf '%s' \"$line\"; printf diagnostic >&2; exit 23",
                 sentinel.as_raw_fd()
             )])
-            .stdin(ChildStdin::File(high_stdin))
             .descriptor_policy(DescriptorPolicy::Explicit)
             .process_mode(mode);
-        let child = command.spawn()?;
+        let mut child = command.spawn()?;
         assert!(matches!(child.inner, ChildKind::Tokio(_)));
-        assert!(child.stdin.is_none());
         let pid = child.id().expect("live child") as libc::pid_t;
         // SAFETY: The child waits for input and still owns this PID.
         assert_eq!(unsafe { libc::getpgid(pid) }, pid);
-        parent.write_all(b"round trip\n").await?;
-        parent.shutdown().await?;
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(b"round trip\n")
+            .await?;
         let output = child.wait_with_output().await?;
         assert_eq!(
             (output.status.code(), output.stdout, output.stderr),
