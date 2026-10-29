@@ -53,7 +53,10 @@ const INTERRUPTION_PREFIX: &str = "codex-interrupted-v1:";
 pub fn read_snapshot(path: &Path) -> io::Result<RecoverySnapshot> {
     let mut loaded: BTreeSet<String> = match std::fs::read(path) {
         Ok(contents) => serde_json::from_slice(&contents).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, "invalid daemon recovery candidate set")
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid daemon recovery candidate set",
+            )
         })?,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(RecoverySnapshot::default()),
         Err(err) => return Err(err),
@@ -63,7 +66,10 @@ pub fn read_snapshot(path: &Path) -> io::Result<RecoverySnapshot> {
         if let Some(metadata) = entry.strip_prefix(INTERRUPTION_PREFIX) {
             // Never include the malformed payload in an error: it may contain credentials.
             snapshot = serde_json::from_str(metadata).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid daemon recovery metadata")
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid daemon recovery metadata",
+                )
             })?;
         }
     }

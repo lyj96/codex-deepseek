@@ -6,7 +6,11 @@ fn private_thread_configs_roundtrip_without_debug_disclosure() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("recovery.json");
     let config = ThreadRecoveryConfig {
-        overrides: [("mcp_servers".into(), serde_json::json!({"private":{"http_headers":{"Authorization":"synthetic-only"}}}))].into(),
+        overrides: [(
+            "mcp_servers".into(),
+            serde_json::json!({"private":{"http_headers":{"Authorization":"synthetic-only"}}}),
+        )]
+        .into(),
         extensions: Default::default(),
     };
     let snapshot = RecoverySnapshot {
@@ -33,12 +37,19 @@ if ($rules[0].AccessControlType -ne 'Allow') { throw 'owner cannot read recovery
 "#])
             .env("CODEX_TEST_PRIVATE_HANDOFF", &path)
             .output().unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o077,
+            0
+        );
     }
 }
 
@@ -46,10 +57,14 @@ if ($rules[0].AccessControlType -ne 'Allow') { throw 'owner cannot read recovery
 fn configs_cannot_revive_threads_absent_from_the_candidate_set() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("recovery.json");
-    write_snapshot(&path, &RecoverySnapshot {
-        configs: [("stale-thread".into(), ThreadRecoveryConfig::default())].into(),
-        ..Default::default()
-    }).unwrap();
+    write_snapshot(
+        &path,
+        &RecoverySnapshot {
+            configs: [("stale-thread".into(), ThreadRecoveryConfig::default())].into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(read_snapshot(&path).unwrap(), RecoverySnapshot::default());
 }
 
@@ -57,9 +72,11 @@ fn configs_cannot_revive_threads_absent_from_the_candidate_set() {
 fn corrupt_private_metadata_is_rejected_without_disclosing_it() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("recovery.json");
-    std::fs::write(&path, serde_json::to_vec(&[
-        "thread-a", "codex-interrupted-v1:{synthetic-private-value",
-    ]).unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&["thread-a", "codex-interrupted-v1:{synthetic-private-value"]).unwrap(),
+    )
+    .unwrap();
     let error = read_snapshot(&path).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(!error.to_string().contains("synthetic-private-value"));

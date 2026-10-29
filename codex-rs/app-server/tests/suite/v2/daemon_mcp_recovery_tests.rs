@@ -18,8 +18,17 @@ async fn managed_restart_preserves_distinct_thread_mcp_overrides_and_tools() -> 
     Mock::given(method("POST"))
         .respond_with(move |request: &wiremock::Request| {
             let name = request.url.path().trim_matches('/');
-            let generation = if mock_restarted.load(Ordering::SeqCst) { "after" } else { "before" };
-            if request.headers.get("x-recovery-thread").and_then(|value| value.to_str().ok()) != Some(name) {
+            let generation = if mock_restarted.load(Ordering::SeqCst) {
+                "after"
+            } else {
+                "before"
+            };
+            if request
+                .headers
+                .get("x-recovery-thread")
+                .and_then(|value| value.to_str().ok())
+                != Some(name)
+            {
                 return ResponseTemplate::new(403);
             }
             let input: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
@@ -36,7 +45,8 @@ async fn managed_restart_preserves_distinct_thread_mcp_overrides_and_tools() -> 
                 Some("resources/templates/list") => json!({"resourceTemplates":[]}),
                 _ => return ResponseTemplate::new(202),
             };
-            ResponseTemplate::new(200).set_body_json(json!({"jsonrpc":"2.0","id":input["id"],"result":result}))
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"jsonrpc":"2.0","id":input["id"],"result":result}))
         })
         .mount(&mock)
         .await;
@@ -47,12 +57,18 @@ async fn managed_restart_preserves_distinct_thread_mcp_overrides_and_tools() -> 
     let mut threads = Vec::new();
     for (index, name) in ["alpha", "beta"].into_iter().enumerate() {
         let servers = std::collections::HashMap::from([(
-            name.to_owned(), json!({"url":format!("{}/{name}",mock.uri()), "required":true,
+            name.to_owned(),
+            json!({"url":format!("{}/{name}",mock.uri()), "required":true,
                 "http_headers":{"X-Recovery-Thread":name}}),
         )]);
-        let thread = start_thread(&mut client, index as i64 + 10, json!({
-            "config":{"mcp_servers":servers}
-        })).await?;
+        let thread = start_thread(
+            &mut client,
+            index as i64 + 10,
+            json!({
+                "config":{"mcp_servers":servers}
+            }),
+        )
+        .await?;
         threads.push((name, thread.thread.id));
     }
     for (index, (name, id)) in threads.iter().enumerate() {
@@ -71,23 +87,35 @@ async fn managed_restart_preserves_distinct_thread_mcp_overrides_and_tools() -> 
     timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
             let loaded = request(&mut client, /*id*/ 30, "thread/loaded/list", json!({})).await?;
-            if threads.iter().all(|(_, id)| loaded["data"].as_array().is_some_and(|items| items.contains(&json!(id)))) {
+            if threads.iter().all(|(_, id)| {
+                loaded["data"]
+                    .as_array()
+                    .is_some_and(|items| items.contains(&json!(id)))
+            }) {
                 return Ok::<(), anyhow::Error>(());
             }
             sleep(Duration::from_millis(25)).await;
         }
-    }).await??;
+    })
+    .await??;
     for (index, (name, id)) in threads.iter().enumerate() {
         assert_thread_tools(&mut client, index as i64 + 40, name, id, "after").await?;
     }
-    assert!(!recovery_file.exists(), "handoff is consumed by the successor");
+    assert!(
+        !recovery_file.exists(),
+        "handoff is consumed by the successor"
+    );
     for name in ["alpha", "beta"] {
         let requests = mock.received_requests().await.unwrap();
-        assert!(requests[previous_requests..].iter().any(|request| {
-            request.method.as_str() == "POST"
-                && request.url.path() == format!("/{name}")
-                && serde_json::from_slice::<serde_json::Value>(&request.body).unwrap()["method"] == "initialize"
-        }), "each thread must initialize its own server in the successor generation");
+        assert!(
+            requests[previous_requests..].iter().any(|request| {
+                request.method.as_str() == "POST"
+                    && request.url.path() == format!("/{name}")
+                    && serde_json::from_slice::<serde_json::Value>(&request.body).unwrap()["method"]
+                        == "initialize"
+            }),
+            "each thread must initialize its own server in the successor generation"
+        );
     }
     request_shutdown(&successor, &socket).await?;
     wait_success(&mut successor).await?;
@@ -103,10 +131,18 @@ async fn assert_thread_tools(
 ) -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
-            let value = request(client, request_id, "mcpServerStatus/list", json!({"threadId":thread_id})).await?;
+            let value = request(
+                client,
+                request_id,
+                "mcpServerStatus/list",
+                json!({"threadId":thread_id}),
+            )
+            .await?;
             let response: ListMcpServerStatusResponse = serde_json::from_value(value)?;
             if response.data.len() == 1
-                && response.data[0].tools.contains_key(&format!("{name}_probe_{generation}"))
+                && response.data[0]
+                    .tools
+                    .contains_key(&format!("{name}_probe_{generation}"))
             {
                 assert_eq!(response.data[0].name, name);
                 assert_eq!(response.data[0].tools.len(), 1);
@@ -115,6 +151,7 @@ async fn assert_thread_tools(
             }
             sleep(Duration::from_millis(25)).await;
         }
-    }).await??;
+    })
+    .await??;
     Ok(())
 }

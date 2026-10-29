@@ -805,7 +805,8 @@ impl MessageProcessor {
                     codex_app_server_protocol::ThreadResumeParams {
                         thread_id: thread_id.clone(),
                         exclude_turns: true,
-                        config: (!saved_config.overrides.is_empty()).then_some(saved_config.overrides),
+                        config: (!saved_config.overrides.is_empty())
+                            .then_some(saved_config.overrides),
                         ..Default::default()
                     },
                     /*app_server_client_name*/ None,

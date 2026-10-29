@@ -58,7 +58,10 @@ impl ThreadRequestProcessor {
                 if !overrides.is_empty() || !extensions.is_empty() {
                     snapshot.configs.insert(
                         thread_id.to_string(),
-                        ThreadRecoveryConfig { overrides, extensions },
+                        ThreadRecoveryConfig {
+                            overrides,
+                            extensions,
+                        },
                     );
                 }
                 if let Some((turn_id, options, environment)) = interrupted {
