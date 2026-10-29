@@ -39,10 +39,16 @@ impl ThreadRequestProcessor {
                     warn!(%thread_id, %err, "skipping daemon restore for thread that could not be persisted");
                     continue;
                 }
-                snapshot.loaded.insert(thread_id.to_string());
                 let thread_config = thread.config().await;
-                let mut overrides = session_flags(&thread_config);
-                let baseline = session_flags(&self.config);
+                let (Ok(mut overrides), Ok(baseline)) =
+                    (session_flags(&thread_config), session_flags(&self.config))
+                else {
+                    // Restore only when the private settings can accompany the thread.
+                    // The encoding error can contain private values, so do not log it.
+                    warn!(%thread_id, "skipping daemon restore for thread whose private configuration could not be encoded");
+                    continue;
+                };
+                snapshot.loaded.insert(thread_id.to_string());
                 overrides.retain(|key, value| baseline.get(key) != Some(value));
                 let extensions = thread
                     .client_mcp_extensions()
@@ -73,7 +79,9 @@ impl ThreadRequestProcessor {
     }
 }
 
-fn session_flags(config: &Config) -> std::collections::HashMap<String, serde_json::Value> {
+fn session_flags(
+    config: &Config,
+) -> Result<std::collections::HashMap<String, serde_json::Value>, serde_json::Error> {
     let mut flags = toml::Value::Table(Default::default());
     for layer in config.config_layer_stack.layers_low_to_high() {
         if matches!(layer.name, ConfigLayerSource::SessionFlags) {
@@ -81,6 +89,5 @@ fn session_flags(config: &Config) -> std::collections::HashMap<String, serde_jso
         }
     }
     // Config-layer TOML values have JSON representations, including datetime strings.
-    serde_json::from_value(serde_json::to_value(flags).expect("config layer is serializable"))
-        .expect("session flags are a table")
+    serde_json::from_value(serde_json::to_value(flags)?)
 }
