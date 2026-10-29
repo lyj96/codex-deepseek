@@ -1,6 +1,9 @@
 use super::*;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -10,9 +13,12 @@ use wiremock::matchers::method;
 async fn managed_restart_preserves_distinct_thread_mcp_overrides_and_tools() -> Result<()> {
     let home = TempDir::new()?;
     let mock = MockServer::start().await;
+    let restarted = Arc::new(AtomicBool::new(false));
+    let mock_restarted = Arc::clone(&restarted);
     Mock::given(method("POST"))
-        .respond_with(|request: &wiremock::Request| {
+        .respond_with(move |request: &wiremock::Request| {
             let name = request.url.path().trim_matches('/');
+            let generation = if mock_restarted.load(Ordering::SeqCst) { "after" } else { "before" };
             if request.headers.get("x-recovery-thread").and_then(|value| value.to_str().ok()) != Some(name) {
                 return ResponseTemplate::new(403);
             }
@@ -23,7 +29,7 @@ async fn managed_restart_preserves_distinct_thread_mcp_overrides_and_tools() -> 
                     "serverInfo":{"name":name,"version":"1.0.0"}
                 }),
                 Some("tools/list") => json!({"tools":[{
-                    "name":format!("{name}_probe"),"description":"Recovery probe",
+                    "name":format!("{name}_probe_{generation}"),"description":"Recovery probe",
                     "inputSchema":{"type":"object","properties":{}}
                 }]}),
                 Some("resources/list") => json!({"resources":[]}),
@@ -50,13 +56,15 @@ async fn managed_restart_preserves_distinct_thread_mcp_overrides_and_tools() -> 
         threads.push((name, thread.thread.id));
     }
     for (index, (name, id)) in threads.iter().enumerate() {
-        assert_thread_tools(&mut client, index as i64 + 20, name, id).await?;
+        assert_thread_tools(&mut client, index as i64 + 20, name, id, "before").await?;
     }
     request_shutdown(&server, &socket).await?;
     wait_success(&mut server).await?;
     let recovery_file = daemon_recovery_file_path(home.path());
     let handoff = daemon_recovery::read_snapshot(&recovery_file)?;
     assert_eq!(handoff.configs.len(), 2);
+    let previous_requests = mock.received_requests().await.unwrap().len();
+    restarted.store(true, Ordering::SeqCst);
     drop(client);
     let mut successor = spawn_server(home.path(), &socket)?;
     let mut client = connect_default_daemon_client(&socket).await?;
@@ -70,16 +78,16 @@ async fn managed_restart_preserves_distinct_thread_mcp_overrides_and_tools() -> 
         }
     }).await??;
     for (index, (name, id)) in threads.iter().enumerate() {
-        assert_thread_tools(&mut client, index as i64 + 40, name, id).await?;
+        assert_thread_tools(&mut client, index as i64 + 40, name, id, "after").await?;
     }
     assert!(!recovery_file.exists(), "handoff is consumed by the successor");
     for name in ["alpha", "beta"] {
-        let count = mock.received_requests().await.unwrap().iter().filter(|request| {
+        let requests = mock.received_requests().await.unwrap();
+        assert!(requests[previous_requests..].iter().any(|request| {
             request.method.as_str() == "POST"
                 && request.url.path() == format!("/{name}")
                 && serde_json::from_slice::<serde_json::Value>(&request.body).unwrap()["method"] == "initialize"
-        }).count();
-        assert_eq!(count, 2, "each thread really reconnects its own MCP server");
+        }), "each thread must initialize its own server in the successor generation");
     }
     request_shutdown(&successor, &socket).await?;
     wait_success(&mut successor).await?;
@@ -91,6 +99,7 @@ async fn assert_thread_tools(
     request_id: i64,
     name: &str,
     thread_id: &str,
+    generation: &str,
 ) -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -98,7 +107,7 @@ async fn assert_thread_tools(
             let response: ListMcpServerStatusResponse = serde_json::from_value(value)?;
             if response.data.len() == 1 && !response.data[0].tools.is_empty() {
                 assert_eq!(response.data[0].name, name);
-                assert!(response.data[0].tools.contains_key(&format!("{name}_probe")));
+                assert!(response.data[0].tools.contains_key(&format!("{name}_probe_{generation}")));
                 assert_eq!(response.next_cursor, None);
                 return Ok::<(), anyhow::Error>(());
             }

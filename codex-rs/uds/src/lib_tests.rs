@@ -89,11 +89,13 @@ async fn socket_validation_rejects_broad_acl_without_repairing_it() {
     let before = inspect(
         r#"
 $ErrorActionPreference = 'Stop'
-$acl = Get-Acl -LiteralPath $env:CODEX_TEST_DIRECTORY
+# The fixture changes only this freshly created directory's DACL. Loading and
+# persisting unrelated audit sections would require SeSecurityPrivilege.
+$acl = [System.Security.AccessControl.DirectorySecurity]::new($env:CODEX_TEST_DIRECTORY, [System.Security.AccessControl.AccessControlSections]::Access)
 $everyone = [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0')
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($everyone, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
 $acl.AddAccessRule($rule)
-Set-Acl -LiteralPath $env:CODEX_TEST_DIRECTORY -AclObject $acl
+[System.IO.Directory]::SetAccessControl($env:CODEX_TEST_DIRECTORY, $acl)
 (Get-Acl -LiteralPath $env:CODEX_TEST_DIRECTORY).Sddl
 "#,
     );
