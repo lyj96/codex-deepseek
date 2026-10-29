@@ -203,6 +203,17 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all spawn_inherits_first_pending_owner_configuration
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all board_unsubscribe_survives_post_and_resume_until_resubscribed
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all tree_shutdown
+      - name: Test daemon restart configuration isolation
+        working-directory: codex-rs
+        run: |
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server-transport --lib daemon_recovery --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::daemon_update_recovery --no-tests fail --retries 0
+      - name: Test stable attached forks, MCP cancellation and API errors
+        working-directory: codex-rs
+        run: |
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::attached_thread --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-rmcp-client --lib ordered_byte_transport --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-api --lib --no-tests fail --retries 0
       - name: Test provider-safe rollout reconstruction and sender provenance
         working-directory: codex-rs
         run: |
@@ -326,6 +337,19 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
         with:
           tool: nextest@0.9.149,just@1.51.0
+      - name: Test private Windows daemon recovery handoff
+        working-directory: codex-rs
+        shell: pwsh
+        env:
+          LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "2"
+        run: |
+          just test -p codex-app-server-transport --lib --locked --target x86_64-pc-windows-msvc daemon_recovery --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-uds --lib --locked --target x86_64-pc-windows-msvc --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test Windows Git ownership and Provider shutdown
         working-directory: codex-rs
         shell: pwsh

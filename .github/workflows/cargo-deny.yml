@@ -17,19 +17,40 @@ jobs:
 
       - uses: ./.github/actions/setup-ci
 
-      - name: Validate one-release advisory approval
-        run: |
-          python3 -m unittest discover -s ../.github/scripts -p 'test_advisory_exceptions.py'
-          python3 ../.github/scripts/check_advisory_exceptions.py
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
 
-      - name: Run cargo-deny
+      - name: Install checksum-pinned advisory scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          scanner="$RUNNER_TEMP/upstream-advisory-scanner"
+          mkdir -p "$scanner"
+          curl --fail --location --retry 3 'https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.0/cargo-deny-0.19.0-x86_64-unknown-linux-musl.tar.gz' -o "$scanner/archive.tgz"
+          echo "0e8c2aa59128612c90d9e09c02204e912f29a5b8d9a64671b94608cbe09e064f  $scanner/archive.tgz" | sha256sum --check --strict
+          tar -xzf "$scanner/archive.tgz" --strip-components=1 -C "$scanner"
+
+      - name: Scan and classify official-stable security risks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s ../.github/scripts -p 'test_upstream_security.py'
+          python3 ../.github/scripts/check_upstream_security.py --cargo-deny "$RUNNER_TEMP/upstream-advisory-scanner/cargo-deny" --report-dir "$RUNNER_TEMP/upstream-security-report"
+
+      - name: Run strict license, bans and source checks
         uses: EmbarkStudios/cargo-deny-action@82eb9f621fbc699dd0918f3ea06864c14cc84246 # v2
         with:
           rust-version: 1.99.1
           manifest-path: ./codex-rs/Cargo.toml
+          command-arguments: bans licenses sources
+
+      - name: Preserve actual security findings and scanner status
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: upstream-security-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/upstream-security-report/
+          if-no-files-found: error
 
       - name: Check for a clean worktree
         if: always() && !cancelled()

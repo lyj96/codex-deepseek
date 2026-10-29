@@ -21,7 +21,8 @@ use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
 
-pub(super) fn prepare_private_directory(path: &Path) -> io::Result<()> {
+/// Creates an owner-only directory, rejecting existing untrusted ACLs or reparse points.
+pub fn prepare_private_directory(path: &Path) -> io::Result<()> {
     let user = current_user()?;
     let user_sid = unsafe { (*(user.as_ptr().cast::<TOKEN_USER>())).User.Sid };
     let mut sid_string = ptr::null_mut();
