@@ -1,5 +1,6 @@
 use super::*;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
+use pretty_assertions::assert_eq;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;

@@ -1,5 +1,9 @@
 //! Cross-platform async Unix domain socket helpers.
 
+// Synchronous shutdown handoffs must not depend on Tokio's blocking pool.
+#[cfg(windows)]
+pub use windows_security::prepare_private_directory;
+
 #[cfg(unix)]
 mod daemon_directory;
 #[cfg(unix)]

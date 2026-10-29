@@ -7,6 +7,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
+#[cfg(not(windows))]
 use codex_core::path_utils::write_atomically;
 use serde::Deserialize;
 use serde::Serialize;
@@ -95,10 +96,26 @@ pub fn write_snapshot(path: &Path, snapshot: &RecoverySnapshot) -> io::Result<()
             serde_json::to_string(snapshot).map_err(io::Error::other)?
         ));
     }
-    write_atomically(
-        path,
-        &serde_json::to_string(&saved).map_err(io::Error::other)?,
-    )
+    let contents = serde_json::to_string(&saved).map_err(io::Error::other)?;
+    #[cfg(not(windows))]
+    return write_atomically(path, &contents);
+    #[cfg(windows)]
+    {
+        use std::io::Write;
+
+        let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+        let staging = parent.join(".recovery-staging");
+        codex_uds::prepare_private_directory(&staging)?;
+        let (staged_path, _guard) =
+            codex_uds::validate_private_socket_path(&staging.join("snapshot"))?;
+        let mut file = tempfile::NamedTempFile::new_in(
+            staged_path.parent().ok_or(io::ErrorKind::InvalidInput)?,
+        )?;
+        file.write_all(contents.as_bytes())?;
+        // Same-volume atomic replacement retains the protected directory's user-only DACL.
+        file.persist(path)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -14,9 +14,26 @@ fn private_thread_configs_roundtrip_without_debug_disclosure() {
         configs: [("thread-a".into(), config)].into(),
         ..Default::default()
     };
+    std::fs::write(&path, "[]").unwrap();
     write_snapshot(&path, &snapshot).unwrap();
     assert_eq!(read_snapshot(&path).unwrap(), snapshot);
     assert!(!format!("{snapshot:?}").contains("synthetic-only"));
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", r#"
+$ErrorActionPreference = 'Stop'
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$acl = Get-Acl -LiteralPath $env:CODEX_TEST_PRIVATE_HANDOFF
+$rules = @($acl.Access)
+if ($rules.Count -ne 1) { throw 'unexpected recovery file access rules' }
+if ($rules[0].IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw 'recovery file accessible by another principal' }
+if ($rules[0].AccessControlType -ne 'Allow') { throw 'owner cannot read recovery file' }
+"#])
+            .env("CODEX_TEST_PRIVATE_HANDOFF", &path)
+            .output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

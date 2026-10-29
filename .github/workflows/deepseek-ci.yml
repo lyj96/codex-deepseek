@@ -331,6 +331,19 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
         with:
           tool: nextest@0.9.149,just@1.51.0
+      - name: Test private Windows daemon recovery handoff
+        working-directory: codex-rs
+        shell: pwsh
+        env:
+          LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "2"
+        run: |
+          just test -p codex-app-server-transport --lib --locked --target x86_64-pc-windows-msvc daemon_recovery --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-uds --lib --locked --target x86_64-pc-windows-msvc --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test Windows Git ownership and Provider shutdown
         working-directory: codex-rs
         shell: pwsh
