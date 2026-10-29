@@ -105,9 +105,11 @@ async fn assert_thread_tools(
         loop {
             let value = request(client, request_id, "mcpServerStatus/list", json!({"threadId":thread_id})).await?;
             let response: ListMcpServerStatusResponse = serde_json::from_value(value)?;
-            if response.data.len() == 1 && !response.data[0].tools.is_empty() {
+            if response.data.len() == 1
+                && response.data[0].tools.contains_key(&format!("{name}_probe_{generation}"))
+            {
                 assert_eq!(response.data[0].name, name);
-                assert!(response.data[0].tools.contains_key(&format!("{name}_probe_{generation}")));
+                assert_eq!(response.data[0].tools.len(), 1);
                 assert_eq!(response.next_cursor, None);
                 return Ok::<(), anyhow::Error>(());
             }
