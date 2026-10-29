@@ -21,6 +21,7 @@ fn private_thread_configs_roundtrip_without_debug_disclosure() {
     #[cfg(windows)]
     {
         let output = std::process::Command::new("powershell.exe")
+            .env_remove("PSModulePath")
             .args(["-NoProfile", "-NonInteractive", "-Command", r#"
 $ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value

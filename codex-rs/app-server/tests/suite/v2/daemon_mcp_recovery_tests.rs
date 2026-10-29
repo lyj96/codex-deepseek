@@ -75,7 +75,8 @@ async fn managed_restart_preserves_distinct_thread_mcp_overrides_and_tools() -> 
     assert!(!recovery_file.exists(), "handoff is consumed by the successor");
     for name in ["alpha", "beta"] {
         let count = mock.received_requests().await.unwrap().iter().filter(|request| {
-            request.url.path() == format!("/{name}")
+            request.method.as_str() == "POST"
+                && request.url.path() == format!("/{name}")
                 && serde_json::from_slice::<serde_json::Value>(&request.body).unwrap()["method"] == "initialize"
         }).count();
         assert_eq!(count, 2, "each thread really reconnects its own MCP server");
