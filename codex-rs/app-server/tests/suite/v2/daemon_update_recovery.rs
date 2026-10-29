@@ -1,5 +1,8 @@
 //! Best-effort loaded-thread snapshots during managed app-server shutdown.
 
+#[path = "daemon_mcp_recovery_tests.rs"]
+mod mcp_recovery_tests;
+
 use super::connection_handling_websocket::DEFAULT_READ_TIMEOUT;
 use super::connection_handling_websocket::create_config_toml;
 use anyhow::Context;
@@ -589,6 +592,7 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
         daemon_recovery::RecoverySnapshot {
             loaded: [id.clone()].into(),
             interrupted: expected,
+            configs: Default::default(),
         }
     );
     // Existing binaries can still read the candidate array and ignore the metadata entry.

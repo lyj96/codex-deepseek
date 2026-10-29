@@ -51,31 +51,26 @@ source, configuration, secrets and the latest verified installed executable.
 
 ## Upstream dependency policy
 
-The four temporary rustls exceptions authorized on 2026-10-16 are removed for
-official stable 0.164.0, which incorporates rustls 0.23.46. Its webpki and root
-certificate packages also incorporate the official stable fixes. These actual
-version changes do not waive other findings or replace fresh dependency scans.
+On 2026-10-29 the user gave standing authorization to retain security risks
+inherited unchanged from official OpenAI Codex stable releases and await
+official fixes. This supersedes the old per-ID and one-release approvals.
+It does not authorize independent dependency upgrades or unreleased backports.
 
-Keep the maintained `serde_norway` workspace alias rather than reintroducing
-`serde_yaml`/`unsafe-libyaml`. Do not copy upstream advisory ignores into the
-Fork without approval. Before the one-release decision below,
-RUSTSEC-2026-0370/0371/0372 were unapproved and the user had chosen to await an
-official migration for RUSTSEC-2026-0374.
-The official stable ignores are not evidence that those packages migrated.
+Every advisory is still scanned without an ignore list. The security parity
+gate verifies the official stable tag/commit and Cargo.lock SHA256 recorded in
+upstream-stable-security.json. An affected package is accepted only if its
+name, version, source and checksum match that official lock exactly.
+New inherited IDs need no further user authorization. Fork-only findings,
+ambiguous package identities, missing diagnostics and scanner execution/index
+failures remain blocking. Bans, license and source checks stay strict.
 
-On 2026-10-24 the user explicitly approved **only the 0.164.0 release** retaining
-RUSTSEC-2026-0370/0371/0372/0374/0385/0386/0387, with every other gate unchanged.
-This supersedes the earlier release block, including 0374, for
-`codex-v0.164.0-deepseek.1` only. Risks remain unresolved; no independent
-dependency upgrade or unreleased Codex backport is authorized. Matching narrow
-audit/deny exceptions record the actual versions, dependency paths, upstream
-tracking, and removal condition in `advisory-exceptions-0.164.0.json`.
-`check_advisory_exceptions.py` rejects another Cargo base, another native tag,
-changed affected versions, or mismatched approval/policy files. Remove/review
-these exceptions before another release or when official dependencies fix them.
+The gate preserves raw scanner exit codes, diagnostics and an explicit
+upstream-risk report in CI artifacts. An accepted risk is unresolved, not a fix
+or a clean scan. Updating the pinned official provenance for a later stable
+base is maintenance work under the standing decision, not a new exception.
 
-Scans still actually run and report temporary exceptions; a scan accepted under
-these exceptions is not a vulnerability fix or a no-warning claim. New findings,
-product defects, mandatory regressions, and fresh local platform preflights
-remain blocking. Do not weaken Fence, test assertions, leaked-handle policy,
-timeouts, required-job handling, or runner permissions to force a green result.
+Keep the maintained serde_norway workspace alias rather than reintroducing
+serde_yaml/unsafe-libyaml. Preserve Provider/account and encrypted-history
+boundaries. Real product defects, mandatory regressions, final formatting,
+exact-head CI and fresh Windows/Linux preflights remain required.
+Do not weaken Fence, leaked-handle policy, timeouts or runner permissions.

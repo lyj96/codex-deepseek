@@ -69,31 +69,9 @@ feature-depth = 1
 #db-urls = ["https://github.com/rustsec/advisory-db"]
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
-ignore = [
-    # Reviewed 2026-07-02. Keep this list in sync with .cargo/audit.toml.
-    # Each exception must identify the dependency path and removal condition.
-    { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; pulled in via starlark/starlark_syntax v0.14.2 used by execpolicy/cli/core; no fixed starlark release yet" },
-    { id = "RUSTSEC-2025-0057", reason = "fxhash is unmaintained; pulled in via starlark_map under starlark v0.14.2 used by execpolicy/cli/core and bm25 used by core; remove when upstream dependencies drop fxhash" },
-    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; pulled in via starlark/v8 used by execpolicy/code-mode; no fixed release yet" },
-    { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill is unmaintained; pulled in via postcard/heapless/pagable under starlark v0.14.2 used by execpolicy/cli/core; no fixed starlark release yet" },
-    # TODO(fcoury): remove this exception when syntect drops yaml-rust and bincode, or updates to versions that have fixed the vulnerabilities.
-    { id = "RUSTSEC-2024-0320", reason = "yaml-rust is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
-    { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
-    { id = "RUSTSEC-2026-0118", reason = "hickory-proto v0.25.2 is pulled in via rama-dns/rama-tcp used by codex-network-proxy; DNSSEC features are not enabled; remove when rama updates to hickory 0.26.1 or hickory-net" },
-    { id = "RUSTSEC-2026-0119", reason = "hickory-proto v0.25.2 is pulled in via rama-dns/rama-tcp used by codex-network-proxy; no fixed rama release is available yet; remove when rama updates to hickory 0.26.1 or hickory-net" },
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml v0.39.4 remains via plist/syntect and wayland-scanner; plist does not exercise the affected APIs and wayland-scanner parses trusted build-time XML; remove when rust-plist#191 and wayland-rs#938 are released" },
-    { id = "RUSTSEC-2026-0195", reason = "quick-xml v0.39.4 remains via plist/syntect and wayland-scanner; plist does not exercise the affected APIs and wayland-scanner parses trusted build-time XML; remove when rust-plist#191 and wayland-rs#938 are released" },
-    # User approved 2026-10-24 for codex-v0.164.0-deepseek.1 ONLY, not fixes.
-    # Exact versions/paths/removal conditions: .github/advisory-exceptions-0.164.0.json.
-    # CI rejects reuse on another base/version/tag. Keep .cargo/audit.toml in sync.
-    { id = "RUSTSEC-2026-0370", reason = "one-release user exception: zvariant4.2.0 via zbus4.4.0/tui; await official migration; only0.164.0-deepseek.1, remove before another release" },
-    { id = "RUSTSEC-2026-0371", reason = "one-release user exception: zbus_names3.0.0 via zbus4.4.0/tui; await official migration; only0.164.0-deepseek.1, remove before another release" },
-    { id = "RUSTSEC-2026-0372", reason = "one-release user exception: zvariant_derive4.2.0 via zvariant/zbus/tui; await official migration; only0.164.0-deepseek.1, remove before another release" },
-    { id = "RUSTSEC-2026-0374", reason = "one-release user exception supersedes prior release block: basic-toml0.1.10 via i18n-config/age/secrets; await official migration; only0.164.0-deepseek.1" },
-    { id = "RUSTSEC-2026-0385", reason = "one-release user exception: ctutils0.4.2 via digest/sqlx; timing risk remains; only0.164.0-deepseek.1, remove on official fix or before another release" },
-    { id = "RUSTSEC-2026-0386", reason = "one-release user exception: tokio1.52.3; unsoundness advisory remains even if absent from scanner errors; only0.164.0-deepseek.1, remove on official fix or before another release" },
-    { id = "RUSTSEC-2026-0387", reason = "one-release user exception: crypto-bigint0.5.5 via elliptic-curve/p256/aws-config; timing risk remains; only0.164.0-deepseek.1, remove on official fix or before another release" },
-]
+# Every finding is scanned. The security parity gate accepts only affected package
+# identities matching the verified official stable lock; unresolved risks stay visible.
+ignore = []
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
 # Setting this to true can be helpful if you have special authentication requirements that cargo-deny does not support.

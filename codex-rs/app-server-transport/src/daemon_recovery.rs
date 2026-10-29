@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
+use std::fmt;
 use std::io;
 use std::path::Path;
 
@@ -14,6 +16,22 @@ pub struct RecoverySnapshot {
     #[serde(skip)]
     pub loaded: BTreeSet<String>,
     pub interrupted: BTreeMap<String, InterruptedTurn>,
+    /// Private, one-generation handoff; never exposed through protocol responses or logs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub configs: BTreeMap<String, ThreadRecoveryConfig>,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ThreadRecoveryConfig {
+    pub overrides: HashMap<String, serde_json::Value>,
+    pub extensions: HashMap<String, serde_json::Value>,
+}
+
+impl fmt::Debug for ThreadRecoveryConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // A config override may contain a credential or private MCP endpoint.
+        formatter.write_str("ThreadRecoveryConfig([REDACTED])")
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -33,22 +51,24 @@ const INTERRUPTION_PREFIX: &str = "codex-interrupted-v1:";
 
 pub fn read_snapshot(path: &Path) -> io::Result<RecoverySnapshot> {
     let mut loaded: BTreeSet<String> = match std::fs::read(path) {
-        Ok(contents) => serde_json::from_slice(&contents).map_err(io::Error::other)?,
+        Ok(contents) => serde_json::from_slice(&contents).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "invalid daemon recovery candidate set")
+        })?,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(RecoverySnapshot::default()),
         Err(err) => return Err(err),
     };
     let mut snapshot = RecoverySnapshot::default();
-    loaded.retain(|entry| {
+    for entry in &loaded {
         if let Some(metadata) = entry.strip_prefix(INTERRUPTION_PREFIX) {
-            if let Ok(saved) = serde_json::from_str::<RecoverySnapshot>(metadata) {
-                snapshot = saved;
-            }
-            false
-        } else {
-            true
+            // Never include the malformed payload in an error: it may contain credentials.
+            snapshot = serde_json::from_str(metadata).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid daemon recovery metadata")
+            })?;
         }
-    });
+    }
+    loaded.retain(|entry| !entry.starts_with(INTERRUPTION_PREFIX));
     snapshot.interrupted.retain(|id, _| loaded.contains(id));
+    snapshot.configs.retain(|id, _| loaded.contains(id));
     snapshot.loaded = loaded;
     Ok(snapshot)
 }
@@ -69,7 +89,7 @@ pub fn write_candidates(path: &Path, candidates: &BTreeSet<String>) -> io::Resul
 
 pub fn write_snapshot(path: &Path, snapshot: &RecoverySnapshot) -> io::Result<()> {
     let mut saved = snapshot.loaded.clone();
-    if !snapshot.interrupted.is_empty() {
+    if !snapshot.interrupted.is_empty() || !snapshot.configs.is_empty() {
         saved.insert(format!(
             "{INTERRUPTION_PREFIX}{}",
             serde_json::to_string(snapshot).map_err(io::Error::other)?
@@ -80,3 +100,7 @@ pub fn write_snapshot(path: &Path, snapshot: &RecoverySnapshot) -> io::Result<()
         &serde_json::to_string(&saved).map_err(io::Error::other)?,
     )
 }
+
+#[cfg(test)]
+#[path = "daemon_recovery_tests.rs"]
+mod tests;
