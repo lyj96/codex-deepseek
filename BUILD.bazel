@@ -50,6 +50,24 @@ platform(
     ],
 )
 
+# Host Rust tools use an MSVC compiler even when the application targets GNU.
+# Constrain the native C/C++ toolchain by ABI so selecting it for those tools
+# cannot also replace the hermetic GNU toolchain for application dependencies.
+toolchain(
+    name = "windows_x86_64_msvc_cc_toolchain",
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:msvc",
+    ],
+    toolchain = "@local_config_cc//:cc-compiler-x64_windows",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
 toolchain(
     name = "windows_gnullvm_tests_on_msvc_host_toolchain",
     exec_compatible_with = [

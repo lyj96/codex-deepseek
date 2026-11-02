@@ -24,16 +24,19 @@ use super::WineRuntimePaths;
 use super::WineTestCommand;
 use super::WineTestProcess;
 use super::install_powershell_runtime;
+use super::log_wine_lifecycle;
 
 async fn waiting_smoke_process() -> Result<WineTestProcess> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
     let mut process = WineTestCommand::new(executable).arg("--wait").spawn()?;
     let mut lines = BufReader::new(process.take_stdout()).lines();
+    log_wine_lifecycle(format_args!("waiting for smoke readiness"));
     let ready_line = lines
         .next_line()
         .await?
         .context("Windows smoke process exited before becoming ready")?;
     assert_eq!(ready_line, "WINE_TEST_READY");
+    log_wine_lifecycle(format_args!("smoke readiness observed"));
     Ok(process)
 }
 
@@ -72,11 +75,13 @@ async fn process_with_failing_wineserver_stop() -> Result<WineTestProcess> {
     let processes = process.processes.as_mut().expect("Wine process guard");
 
     let mut command = TokioCommand::from(processes.stop_wineserver_command());
+    log_wine_lifecycle(format_args!("pre-stopping wineserver for failure fixture"));
     let status = command
         .status()
         .await
         .context("pre-stop isolated wineserver")?;
     assert!(status.success(), "wineserver exited with {status}");
+    log_wine_lifecycle(format_args!("failure fixture wineserver pre-stop finished"));
 
     processes.runtime.wineserver = processes.prefix.path().join("missing-wineserver");
     Ok(process)
@@ -182,6 +187,7 @@ async fn shutdown_reports_nonzero_process_exit() -> Result<()> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
     let mut process = WineTestCommand::new(executable).arg("--fail").spawn()?;
     let prefix = prefix_path(&process);
+    log_wine_lifecycle(format_args!("waiting for intentional nonzero child exit"));
     let status = process
         .processes
         .as_mut()
@@ -189,6 +195,7 @@ async fn shutdown_reports_nonzero_process_exit() -> Result<()> {
         .child
         .wait()
         .await?;
+    log_wine_lifecycle(format_args!("intentional child wait finished: {status}"));
     assert!(
         !status.success(),
         "Windows smoke process unexpectedly passed"

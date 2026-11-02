@@ -176,9 +176,12 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Build agent runtime test helpers
         working-directory: codex-rs
-        run: >-
-          CARGO_BUILD_JOBS=1 cargo build --locked
-          --bin codex-code-mode-host --bin codex-exec --bin exec-server --bin codex-exec-server
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+          CARGO_BUILD_JOBS=1 cargo build --locked \
+            --bin codex-code-mode-host --bin codex-exec --bin exec-server --bin codex-exec-server --bin bwrap
+          "${CARGO_TARGET_DIR:-target}/debug/bwrap" --version
       - name: Test external provider routing
         working-directory: codex-rs
         run: |

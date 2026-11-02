@@ -259,15 +259,38 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUI
   # Windows cross-compilation depends on authenticated RBE. Preserve the local
   # Windows build shape when credentials are unavailable.
   ci_config=ci-windows
-  # Keep Rust proc-macros on the same GNU ABI as hermetic LLVM's C/C++
-  # dependencies. A forced MSVC host links MinGW objects with rust-lld/MSVC.
+  # rules_rs 0.0.96 supplies an MSVC-host rustc on Windows. Proc-macros must
+  # target that compiler's host ABI even when the application targets gnullvm.
+  windows_msvc_host_platform=1
 fi
 
 post_config_bazel_args=()
+if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+  has_target_platform_override=0
+  for arg in "${bazel_args[@]}"; do
+    if [[ "$arg" == --platforms=* || "$arg" == --platforms ]]; then
+      has_target_platform_override=1
+      break
+    fi
+  done
+  if [[ $has_target_platform_override -eq 0 ]]; then
+    # The authenticated cross config normally supplies this target. Retain
+    # gnullvm coverage when the local fallback changes only the host platform.
+    post_config_bazel_args+=("--platforms=//:windows_x86_64_gnullvm")
+  fi
+  post_config_bazel_args+=("--extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain")
+  # Hermetic LLVM's Windows C/C++ toolchain also matches MSVC platforms but
+  # emits MinGW objects. Use the installed SDK for MSVC host dependencies only;
+  # the ABI constraint leaves the application's gnullvm C/C++ inputs unchanged.
+  post_config_bazel_args+=(
+    --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0
+    --extra_toolchains=//:windows_x86_64_msvc_cc_toolchain
+  )
+fi
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; then
   has_host_platform_override=0
   for arg in "${bazel_args[@]}"; do
-    if [[ "$arg" == --host_platform=* ]]; then
+    if [[ "$arg" == --host_platform=* || "$arg" == --host_platform ]]; then
       has_host_platform_override=1
       break
     fi
@@ -409,6 +432,21 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   bazel_run_args+=("--config=${ci_config}")
 else
   echo "BuildBuddy API key is not available; using local Bazel configuration."
+  if [[ "${GITHUB_ACTIONS:-}" == "true" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]; then
+    has_disk_cache_override=0
+    for arg in "${bazel_args[@]}"; do
+      if [[ "$arg" == --disk_cache=* || "$arg" == --disk_cache ]]; then
+        has_disk_cache_override=1
+        break
+      fi
+    done
+    if [[ $has_disk_cache_override -eq 0 ]]; then
+      # The remote CI config disables this cache, but the unkeyed fallback
+      # otherwise inherits the local default and duplicates action outputs.
+      # Hosted jobs persist repository downloads, not this disposable cache.
+      bazel_run_args+=(--disk_cache=)
+    fi
+  fi
 fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")

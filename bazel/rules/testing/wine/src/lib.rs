@@ -76,7 +76,12 @@ impl WineTestCommand {
     pub fn spawn(self) -> Result<WineTestProcess> {
         let runtime = WineRuntimePaths::from_runfiles()?;
         let prefix = TempDir::new().context("create isolated Wine prefix")?;
+        log_wine_lifecycle(format_args!(
+            "materializing PowerShell in {}",
+            prefix.path().display()
+        ));
         install_powershell_runtime(prefix.path(), &runtime.powershell_runtime)?;
+        log_wine_lifecycle(format_args!("PowerShell materialized; spawning Wine"));
         let mut command = StdCommand::new(&runtime.wine);
         configure_wine_environment(&mut command, &runtime, prefix.path());
         command
@@ -92,6 +97,7 @@ impl WineTestCommand {
         let child = command
             .spawn()
             .context("start Windows process under Wine")?;
+        log_wine_lifecycle(format_args!("Wine child spawned"));
 
         Ok(WineTestProcess {
             processes: Some(WineProcesses {
@@ -190,6 +196,7 @@ impl WineRuntimePaths {
 
 impl WineProcesses {
     async fn shutdown(&mut self) -> Result<()> {
+        log_wine_lifecycle(format_args!("async teardown checking child"));
         let (kill_result, check_exit_status) = match self.child.try_wait() {
             Ok(Some(_)) => (Ok(()), true),
             Ok(None) => (
@@ -200,6 +207,7 @@ impl WineProcesses {
             ),
             Err(error) => (Err(error).context("check Windows process status"), false),
         };
+        log_wine_lifecycle(format_args!("async teardown waiting for child"));
         let wait_result = self
             .child
             .wait()
@@ -212,6 +220,7 @@ impl WineProcesses {
                 );
                 Ok(())
             });
+        log_wine_lifecycle(format_args!("async child wait finished; stopping wineserver"));
         let wineserver_result = async {
             let mut command = TokioCommand::from(self.stop_wineserver_command());
             let status = command.status().await.context("stop isolated wineserver")?;
@@ -219,6 +228,7 @@ impl WineProcesses {
             Ok(())
         }
         .await;
+        log_wine_lifecycle(format_args!("async wineserver stop finished"));
 
         // Every cleanup action has been attempted, so an individual error
         // should not cause the blocking fallback to repeat them.
@@ -294,6 +304,14 @@ impl Drop for WineProcesses {
 
 fn log_panic_cleanup(args: std::fmt::Arguments<'_>) {
     let _ = writeln!(std::io::stderr().lock(), "{args}");
+}
+
+fn log_wine_lifecycle(args: std::fmt::Arguments<'_>) {
+    // Write directly so a target-level timeout retains the last reached phase
+    // even when libtest has not released a running test's captured output.
+    let thread = std::thread::current();
+    let name = thread.name().unwrap_or("unnamed");
+    let _ = writeln!(std::io::stderr().lock(), "Wine lifecycle [{name}]: {args}");
 }
 
 fn configure_wine_environment(command: &mut StdCommand, runtime: &WineRuntimePaths, prefix: &Path) {
