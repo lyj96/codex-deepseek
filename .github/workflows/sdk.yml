@@ -1,13 +1,24 @@
 name: sdk
 
 on:
+  # Allow focused SDK verification without restarting the entire Bazel matrix.
+  workflow_dispatch:
+    inputs:
+      run_bazel:
+        type: boolean
+        default: true
   workflow_call:
+    inputs:
+      run_bazel:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
 
 jobs:
   python-sdk-installation:
-    runs-on:
-      group: ${{ github.event.repository.name }}-runners
-      labels: ${{ github.event.repository.name }}-linux-x64
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -36,10 +47,9 @@ jobs:
             '
 
   sdks:
-    runs-on:
-      group: ${{ github.event.repository.name }}-runners
-      labels: ${{ github.event.repository.name }}-linux-x64
-    timeout-minutes: 20
+    if: ${{ inputs.run_bazel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
     environment:
       name: bazel
       deployment: false

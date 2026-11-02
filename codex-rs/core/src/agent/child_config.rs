@@ -3,6 +3,9 @@
 //! Spawn and reload share live runtime policy; role and model precedence, full-history
 //! inheritance, and validation messages remain the same for each multi-agent version.
 
+use crate::agent::external_model_route::ExternalModelRoute;
+use crate::agent::external_model_route::apply_external_model_route;
+use crate::agent::external_model_route::model_matches_effective_external_provider;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::config::Config;
@@ -35,12 +38,19 @@ pub(crate) enum SpawnConfigVersion {
     V2,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpawnModelRoute {
+    SessionCatalog,
+    ExternalProvider,
+}
+
 pub(crate) struct SpawnConfigOptions<'a> {
     pub(crate) version: SpawnConfigVersion,
     pub(crate) full_history_fork: bool,
     pub(crate) role_name: Option<&'a str>,
     pub(crate) model: Option<&'a str>,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
+    pub(crate) model_route: SpawnModelRoute,
 }
 
 pub(crate) struct PreparedSpawnConfig {
@@ -60,16 +70,41 @@ pub(crate) async fn prepare_agent_spawn_config(
     if options.version == SpawnConfigVersion::V1 && options.full_history_fork {
         reject_full_fork_agent_type_override(options.role_name)?;
     }
+    let mut routed_model = None;
+    let mut role_applied = false;
+    if options.model_route == SpawnModelRoute::ExternalProvider
+        && let Some(requested_model) = options.model
+    {
+        if options.role_name.is_some() {
+            apply_spawn_agent_role(session, &mut config, options.role_name).await?;
+            role_applied = true;
+        }
+        routed_model = Some(
+            match apply_external_model_route(&mut config, requested_model)
+                .map_err(|error| error.to_string())?
+            {
+                ExternalModelRoute::Applied { model, .. } => model,
+                ExternalModelRoute::NotMatched if options.role_name.is_some() => {
+                    requested_model.to_string()
+                }
+                ExternalModelRoute::NotMatched => {
+                    return Err("External model is not configured. Add an explicit model route or use a legacy provider-prefixed model name.".to_string());
+                }
+            },
+        );
+    }
     apply_requested_spawn_agent_model_overrides(
         session,
         step_context,
         &mut config,
-        options.model,
+        routed_model.as_deref().or(options.model),
         options.reasoning_effort,
+        options.model_route,
     )
     .await?;
-    if !options.full_history_fork
-        || (options.version == SpawnConfigVersion::V2 && options.role_name.is_some())
+    if !role_applied
+        && (!options.full_history_fork
+            || (options.version == SpawnConfigVersion::V2 && options.role_name.is_some()))
     {
         apply_spawn_agent_role(session, &mut config, options.role_name).await?;
         if options.version == SpawnConfigVersion::V2
@@ -207,6 +242,7 @@ async fn apply_requested_spawn_agent_model_overrides(
     config: &mut Config,
     requested_model: Option<&str>,
     requested_reasoning_effort: Option<ReasoningEffort>,
+    model_route: SpawnModelRoute,
 ) -> Result<(), String> {
     let turn = step_context.turn.as_ref();
     let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
@@ -217,16 +253,31 @@ async fn apply_requested_spawn_agent_model_overrides(
     }
 
     if let Some(requested_model) = requested_model {
-        let available_models = session
-            .services
-            .models_manager
-            .list_models(RefreshStrategy::Offline, config.http_client_factory())
-            .await;
+        let available_models = match model_route {
+            SpawnModelRoute::SessionCatalog => {
+                session
+                    .services
+                    .models_manager
+                    .list_models(RefreshStrategy::Offline, config.http_client_factory())
+                    .await
+            }
+            SpawnModelRoute::ExternalProvider => config
+                .model_catalog
+                .as_ref()
+                .map(|catalog| catalog.models.clone().into_iter().map(Into::into).collect())
+                .unwrap_or_default(),
+        };
         let selected_model_name = find_spawn_agent_model_name(
             &available_models,
             requested_model,
             turn.multi_agent_version,
-        )?;
+        )
+        .or_else(|err| {
+            (model_route == SpawnModelRoute::ExternalProvider
+                && model_matches_effective_external_provider(config, requested_model))
+            .then(|| requested_model.to_string())
+            .ok_or(err)
+        })?;
         let selected_model_info = session
             .services
             .models_manager

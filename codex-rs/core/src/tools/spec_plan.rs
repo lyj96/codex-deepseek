@@ -5,6 +5,7 @@ use crate::image_preparation::unified_image_budget_enabled;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
+use crate::tools::context::ToolInvocation;
 use crate::tools::effective_tool_mode;
 use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
@@ -38,9 +39,14 @@ use crate::tools::handlers::multi_agents::SendInputHandler;
 use crate::tools::handlers::multi_agents::SpawnAgentHandler;
 use crate::tools::handlers::multi_agents::WaitAgentHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MAX_EXTERNAL_SPAWN_AGENT_MODEL_OVERRIDES;
+use crate::tools::handlers::multi_agents_common::MAX_SPAWN_AGENT_MODEL_OVERRIDES;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_spec::FOLLOWUP_EXTERNAL_TASK_TOOL_NAME;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
+use crate::tools::handlers::multi_agents_spec::SEND_EXTERNAL_MESSAGE_TOOL_NAME;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
@@ -54,6 +60,7 @@ use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::multi_agent_tool::multi_agent_v2_handler;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
@@ -87,12 +94,14 @@ use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolExposures;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
 use codex_tools::request_user_input_available_modes;
+use futures::future::BoxFuture;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -1470,29 +1479,27 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
                 turn_context.config.multi_agent_v2.hide_spawn_agent_metadata;
+            let spawn_options = SpawnAgentToolOptions {
+                available_models: turn_context.available_models.clone(),
+                max_model_overrides: MAX_SPAWN_AGENT_MODEL_OVERRIDES,
+                agent_type_description,
+                expose_agent_type: !turn_context.config.agent_roles.is_empty(),
+                hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
+                expose_spawn_agent_model_overrides: turn_context
+                    .config
+                    .multi_agent_v2
+                    .expose_spawn_agent_model_overrides,
+                multi_agent_version: turn_context.multi_agent_version,
+                model_catalog_in_context: turn_context
+                    .config
+                    .features
+                    .enabled(Feature::ModelCatalogInContext),
+                usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
+            };
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(
                     SpawnAgentHandlerV2::new(
-                        SpawnAgentToolOptions {
-                            available_models: turn_context.available_models.clone(),
-                            multi_agent_version: turn_context.multi_agent_version,
-                            model_catalog_in_context: turn_context
-                                .config
-                                .features
-                                .enabled(Feature::ModelCatalogInContext),
-                            agent_type_description,
-                            expose_agent_type: !turn_context.config.agent_roles.is_empty(),
-                            hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
-                            expose_spawn_agent_model_overrides: turn_context
-                                .config
-                                .multi_agent_v2
-                                .expose_spawn_agent_model_overrides,
-                            usage_hint_text: turn_context
-                                .config
-                                .multi_agent_v2
-                                .usage_hint_text
-                                .clone(),
-                        },
+                        spawn_options.clone(),
                         spawn_agent_description.map(str::to_owned),
                     ),
                     tool_namespace,
@@ -1552,6 +1559,45 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 ),
                 exposure,
             );
+            let external_models =
+                crate::agent::external_model_route::configured_model_presets(&turn_context.config);
+            if !external_models.is_empty() {
+                let mut external_spawn_options = spawn_options;
+                external_spawn_options.available_models = external_models;
+                external_spawn_options.max_model_overrides =
+                    MAX_EXTERNAL_SPAWN_AGENT_MODEL_OVERRIDES;
+                // The context catalog lists session models, not cross-provider routes.
+                external_spawn_options.model_catalog_in_context = false;
+                registry.register_trusted_with_exposure(
+                    plaintext_external_agent_handler(
+                        SpawnAgentHandlerV2::new(
+                            external_spawn_options,
+                            /*description_override*/ None,
+                        ),
+                        SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+                        "Spawn an agent using a configured external model provider. Set `model` to one of the configured external model ids; `agent_type` is optional. External-provider agents may use `fork_turns`=`all` to inherit full history across configured external providers. Legacy positive turn counts also inherit full history, not partial history. When the current agent uses OpenAI, set `fork_turns` to `none` because encrypted OpenAI history cannot cross providers.",
+                    ),
+                    exposure,
+                );
+                if !turn_context.config.multi_agent_v2.disable_direct_message {
+                    registry.register_trusted_with_exposure(
+                        plaintext_external_agent_handler(
+                            SendMessageHandlerV2,
+                            SEND_EXTERNAL_MESSAGE_TOOL_NAME,
+                            "Queue a plaintext message for an agent that uses an external model provider.",
+                        ),
+                        exposure,
+                    );
+                    registry.register_trusted_with_exposure(
+                        plaintext_external_agent_handler(
+                            FollowupTaskHandlerV2,
+                            FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
+                            "Send a plaintext follow-up task to an agent that uses an external model provider.",
+                        ),
+                        exposure,
+                    );
+                }
+            }
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
@@ -1563,6 +1609,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             registry.add_with_exposure(
                 SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
+                    max_model_overrides: MAX_SPAWN_AGENT_MODEL_OVERRIDES,
                     multi_agent_version: turn_context.multi_agent_version,
                     model_catalog_in_context: turn_context
                         .config
@@ -1666,6 +1713,105 @@ fn append_extension_tool_executors(
     }
 
     standalone_web_search_tool
+}
+
+fn plaintext_external_agent_handler(
+    handler: impl CoreToolRuntime + 'static,
+    tool_name: &'static str,
+    guidance: &'static str,
+) -> Arc<dyn CoreToolRuntime> {
+    Arc::new(PlaintextExternalAgentHandler {
+        handler: Arc::new(handler),
+        tool_name,
+        guidance,
+    })
+}
+
+struct PlaintextExternalAgentHandler {
+    handler: Arc<dyn CoreToolRuntime>,
+    tool_name: &'static str,
+    guidance: &'static str,
+}
+
+impl ToolExecutor<ToolInvocation> for PlaintextExternalAgentHandler {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(self.tool_name)
+    }
+
+    fn spec(&self) -> ToolSpec {
+        let ToolSpec::Function(mut tool) = self.handler.spec() else {
+            unreachable!("multi-agent v2 handlers must expose function tools");
+        };
+        tool.name = self.tool_name.to_string();
+        tool.description = format!(
+            "{} The message is readable by the local Codex client and redacted from tool logs.\n\n{}",
+            self.guidance, tool.description
+        );
+        if let Some(message_schema) = tool
+            .parameters
+            .properties
+            .as_mut()
+            .and_then(|properties| properties.get_mut("message"))
+        {
+            message_schema.encrypted = None;
+        }
+        if self.tool_name == SPAWN_EXTERNAL_AGENT_TOOL_NAME
+            && let Some(fork_turns_schema) = tool
+                .parameters
+                .properties
+                .as_mut()
+                .and_then(|properties| properties.get_mut("fork_turns"))
+        {
+            fork_turns_schema.description = Some(
+                "Parent history to inherit. Defaults to `all`; use `none` to start without parent history. External-provider agents may use `all` even when the target uses another configured external provider. Legacy positive turn counts inherit full history, not partial history. When the current agent uses OpenAI, use `none` because encrypted OpenAI history cannot cross providers."
+                    .into(),
+            );
+        }
+        ToolSpec::Function(tool)
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.handler.exposure()
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.handler.supports_parallel_tool_calls()
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        self.handler.search_info()
+    }
+
+    fn handle<'a>(&'a self, mut invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
+        // Native Code Mode already supplies plaintext. Retain its cell identity so
+        // origin and lifecycle tracking still refer to the call that sent the message.
+        if !matches!(
+            &invocation.source,
+            crate::tools::context::ToolCallSource::CodeMode { .. }
+        ) {
+            invocation.source = crate::tools::context::ToolCallSource::DirectPlaintextMessage;
+        }
+        self.handler.handle(invocation)
+    }
+}
+
+impl CoreToolRuntime for PlaintextExternalAgentHandler {
+    fn wait_until_ready<'a>(&'a self, session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
+        self.handler.wait_until_ready(session)
+    }
+
+    fn matches_kind(&self, payload: &crate::tools::context::ToolPayload) -> bool {
+        self.handler.matches_kind(payload)
+    }
+
+    fn create_diff_consumer(
+        &self,
+    ) -> Option<Box<dyn crate::tools::registry::ToolArgumentDiffConsumer>> {
+        self.handler.create_diff_consumer()
+    }
 }
 
 fn compare_code_mode_tools(

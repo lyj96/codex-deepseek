@@ -1,12 +1,9 @@
 name: v8-canary
 
-# Do not use trigger-level path filters here. This workflow is also called by
-# postmerge-ci, and GitHub cannot share a path filter between pull_request and
-# workflow_call. v8_canary_changes.py is the single source of truth instead;
-# unrelated events run only the cheap metadata job below.
+# On the fork, the large V8 matrix is extended coverage, dispatched manually.
+# Keep workflow_call for upstream postmerge-ci compatibility.
 on:
   workflow_call:
-  pull_request: {}
   workflow_dispatch:
 
 concurrency:
@@ -121,13 +118,13 @@ jobs:
             sandbox: true
             target: x86_64-apple-darwin
             variant: ptrcomp-sandbox
-          - runner: macos-15-xlarge
+          - runner: macos-15
             bazel_config: ci-macos
             platform: macos_arm64
             sandbox: false
             target: aarch64-apple-darwin
             variant: release
-          - runner: macos-15-xlarge
+          - runner: macos-15
             bazel_config: ci-macos
             platform: macos_arm64
             sandbox: true

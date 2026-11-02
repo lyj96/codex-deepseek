@@ -12,6 +12,9 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 pub const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
+pub const SPAWN_EXTERNAL_AGENT_TOOL_NAME: &str = "spawn_external_agent";
+pub const SEND_EXTERNAL_MESSAGE_TOOL_NAME: &str = "send_external_message";
+pub const FOLLOWUP_EXTERNAL_TASK_TOOL_NAME: &str = "followup_external_task";
 const MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
@@ -26,6 +29,7 @@ const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 #[derive(Debug, Clone)]
 pub struct SpawnAgentToolOptions {
     pub available_models: Vec<ModelPreset>,
+    pub max_model_overrides: usize,
     pub agent_type_description: String,
     pub expose_agent_type: bool,
     pub hide_agent_type_model_reasoning: bool,
@@ -39,6 +43,7 @@ impl Default for SpawnAgentToolOptions {
     fn default() -> Self {
         Self {
             available_models: Vec::new(),
+            max_model_overrides: MAX_SPAWN_AGENT_MODEL_OVERRIDES,
             agent_type_description: String::new(),
             expose_agent_type: true,
             hide_agent_type_model_reasoning: false,
@@ -71,7 +76,11 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
     let available_models_description = (!options.model_catalog_in_context
         && !options.hide_agent_type_model_reasoning)
         .then(|| {
-            spawn_agent_models_description(&options.available_models, options.multi_agent_version)
+            spawn_agent_models_description(
+                &options.available_models,
+                options.multi_agent_version,
+                options.max_model_overrides,
+            )
         });
     let inherited_model_guidance =
         (!options.hide_agent_type_model_reasoning).then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
@@ -112,7 +121,11 @@ pub fn create_spawn_agent_tool_v2(
     let available_models_description = (!options.model_catalog_in_context
         && options.expose_spawn_agent_model_overrides)
         .then(|| {
-            spawn_agent_models_description(&options.available_models, options.multi_agent_version)
+            spawn_agent_models_description(
+                &options.available_models,
+                options.multi_agent_version,
+                options.max_model_overrides,
+            )
         });
     let inherited_model_guidance = if options.model_catalog_in_context {
         options
@@ -822,12 +835,13 @@ Note that passing `fork_turns="none"` will not pass any surrounding context to t
 fn spawn_agent_models_description(
     models: &[ModelPreset],
     multi_agent_version: MultiAgentVersion,
+    max_models: usize,
 ) -> String {
     let visible_models: Vec<&ModelPreset> = models
         .iter()
         .filter(|model| model.show_in_picker)
         .filter(|model| model_supports_multi_agent_backend(model, multi_agent_version))
-        .take(MAX_SPAWN_AGENT_MODEL_OVERRIDES)
+        .take(max_models)
         .collect();
     if visible_models.is_empty() {
         return "No picker-visible model overrides are currently loaded.".to_string();

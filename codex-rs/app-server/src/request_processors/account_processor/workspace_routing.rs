@@ -334,7 +334,7 @@ impl AccountRequestProcessor {
             };
             let auth = self.auth_manager.auth_cached();
             let provider = create_model_provider(
-                config.model_provider.clone(),
+                super::desktop_identity::account_provider(&config, &self.auth_manager),
                 Some(self.auth_manager.clone()),
             );
             let account_state = provider

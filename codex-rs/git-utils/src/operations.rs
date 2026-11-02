@@ -138,6 +138,7 @@ where
     }
     command.args(&args_vec);
     scrub_non_inheritable_env_vars(&mut command);
+    crate::ensure_safe_repository_discovery(&command)?;
     let output = command.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

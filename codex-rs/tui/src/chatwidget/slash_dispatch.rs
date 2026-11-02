@@ -378,6 +378,10 @@ impl ChatWidget {
                 self.open_model_popup();
                 self.defer_input_until_settings_applied();
             }
+            SlashCommand::Provider => {
+                self.open_provider_popup();
+                self.defer_input_until_settings_applied();
+            }
             SlashCommand::Presets => {
                 self.open_quick_dial_menu();
             }
@@ -1337,6 +1341,7 @@ impl ChatWidget {
             | SlashCommand::Compact
             | SlashCommand::Review
             | SlashCommand::Model
+            | SlashCommand::Provider
             | SlashCommand::Presets
             | SlashCommand::Plan
             | SlashCommand::Goal

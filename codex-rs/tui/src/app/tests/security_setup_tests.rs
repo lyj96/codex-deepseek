@@ -15,6 +15,47 @@ use serde_json::json;
 use tokio::net::TcpListener;
 
 #[tokio::test]
+async fn security_setup_does_not_fetch_for_external_provider() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    app.config.model_provider_id = "deepseek".to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?;
+    let daemon = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        serve_reconnect_requests(tokio_tungstenite::accept_async(stream).await?, |request| {
+            assert_ne!(request.method, "getAuthStatus");
+            std::future::ready(Some(json!({"result": {}})))
+        })
+        .await
+    });
+    let server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        crate::connect_remote_app_server(endpoint).await?,
+        ThreadParamsMode::Embedded,
+    );
+    let (tx, mut events) = mpsc::unbounded_channel();
+
+    crate::security_setup::prefetch(
+        &app.config,
+        &server,
+        AppEventSender::new(tx),
+        app.chat_widget.security_setup_request_id,
+    );
+
+    // The early return drops the only sender without querying auth or ChatGPT.
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await?
+            .is_none()
+    );
+    drop(app);
+    server.shutdown().await?;
+    let methods = daemon.await??;
+    assert!(!methods.iter().any(|method| method == "getAuthStatus"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn security_setup_fetch_with_default_features_uses_authenticated_codex_endpoint() -> Result<()>
 {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;

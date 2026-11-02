@@ -5,6 +5,7 @@ use super::spawn_telemetry::SpawnMeasurements;
 use super::spawn_telemetry::record_spawn_success;
 use super::*;
 use crate::agent::child_config::build_agent_resume_config;
+use crate::agent::external_model_route::apply_external_provider_catalog;
 use crate::agent::history::load_agent_model_context;
 use crate::agent::history::prepare_forked_history;
 use crate::agent::role::apply_role_to_config;
@@ -381,6 +382,11 @@ impl LocalAgentControl {
                     ))
                 })?;
             config.model_provider_id = stored_model_provider;
+        }
+        if config.model_provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID {
+            let provider_id = config.model_provider_id.clone();
+            apply_external_provider_catalog(&mut config, &provider_id)
+                .map_err(CodexErr::InvalidRequest)?;
         }
         let parent_thread_id = owner_thread_id
             .or_else(|| initial_history.get_resumed_parent_thread_id())

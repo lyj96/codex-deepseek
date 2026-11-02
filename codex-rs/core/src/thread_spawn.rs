@@ -6,6 +6,7 @@ use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
 use crate::agent::child_config::SpawnConfigVersion;
+use crate::agent::child_config::SpawnModelRoute;
 use crate::agent::child_config::prepare_agent_spawn_config;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::types::AgentMessage;
@@ -26,6 +27,12 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 
+/// Whether a message came from a plaintext host/tool or the parent's model transport.
+pub(crate) enum ThreadSpawnMessage {
+    Plaintext(String),
+    ProviderEncoded(String),
+}
+
 /// Child creation options; omitted overrides retain native MAv2 inheritance and role rules.
 pub struct ThreadCreateRequest {
     pub task_name: String,
@@ -38,10 +45,12 @@ pub struct ThreadCreateRequest {
 
 pub(crate) struct ThreadSpawnRequest {
     pub task_name: String,
-    /// Explicit encoding: hosts normally provide plaintext; native tools can forward ciphertext.
-    pub message: AgentMessage,
+    /// Preserve parent transport encoding for the controller's recipient admission.
+    pub message: ThreadSpawnMessage,
     /// `None` starts fresh; `FullHistory` uses native fork preparation.
     pub fork_mode: Option<SpawnAgentForkMode>,
+    pub fork_turns_was_explicit: bool,
+    pub model_route: SpawnModelRoute,
     pub agent_type: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -50,9 +59,9 @@ pub(crate) struct ThreadSpawnRequest {
 impl ThreadSpawnRequest {
     pub(crate) fn into_parts(
         self,
-    ) -> Result<(ThreadCreateRequest, AgentMessage), ThreadSpawnError> {
+    ) -> Result<(ThreadCreateRequest, ThreadSpawnMessage), ThreadSpawnError> {
         let message_text = match &self.message {
-            AgentMessage::Plaintext(text) | AgentMessage::Encrypted(text) => text,
+            ThreadSpawnMessage::Plaintext(text) | ThreadSpawnMessage::ProviderEncoded(text) => text,
         };
         if message_text.trim().is_empty() {
             return Err(ThreadSpawnError::Preparation(
@@ -100,8 +109,29 @@ pub(crate) async fn spawn(
     call_id: &str,
     request: ThreadSpawnRequest,
 ) -> Result<ThreadSpawnResult, ThreadSpawnError> {
+    let model_route = request.model_route;
+    let fork_turns_was_explicit = request.fork_turns_was_explicit;
     let (request, message) = request.into_parts()?;
-    let (settings, task_name) = prepare(session, step_context, call_id, request).await?;
+    let (settings, task_name) = prepare_routed(
+        session,
+        step_context,
+        call_id,
+        request,
+        model_route,
+        fork_turns_was_explicit,
+    )
+    .await?;
+    let parent_provider = &step_context.turn.config.model_provider_id;
+    let message = match message {
+        ThreadSpawnMessage::ProviderEncoded(text)
+            if parent_provider == codex_model_provider_info::OPENAI_PROVIDER_ID =>
+        {
+            AgentMessage::Encrypted(text)
+        }
+        ThreadSpawnMessage::Plaintext(text) | ThreadSpawnMessage::ProviderEncoded(text) => {
+            AgentMessage::Plaintext(text)
+        }
+    };
     let request = SpawnRequest {
         caller: session.thread_id,
         config: settings.config,
@@ -127,10 +157,29 @@ pub(crate) async fn prepare(
     call_id: &str,
     request: ThreadCreateRequest,
 ) -> Result<(ChildSpawnSettings, AgentPath), ThreadSpawnError> {
+    prepare_routed(
+        session,
+        step_context,
+        call_id,
+        request,
+        SpawnModelRoute::SessionCatalog,
+        /*fork_turns_was_explicit*/ true,
+    )
+    .await
+}
+
+async fn prepare_routed(
+    session: &Session,
+    step_context: &StepContext,
+    call_id: &str,
+    request: ThreadCreateRequest,
+    model_route: SpawnModelRoute,
+    fork_turns_was_explicit: bool,
+) -> Result<(ChildSpawnSettings, AgentPath), ThreadSpawnError> {
     let turn = &step_context.turn;
     let ThreadCreateRequest {
         task_name,
-        fork_mode,
+        mut fork_mode,
         agent_type,
         model,
         reasoning_effort,
@@ -148,11 +197,31 @@ pub(crate) async fn prepare(
             role_name,
             model: model.as_deref(),
             reasoning_effort,
+            model_route,
         },
     )
     .await
     .map_err(ThreadSpawnError::Preparation)?;
     let config = prepared.config;
+    let crosses_model_providers = config.model_provider_id != turn.config.model_provider_id;
+    if turn.config.ephemeral && fork_mode.is_some() {
+        return Err(ThreadSpawnError::Preparation(
+            "Forked subagents require persisted parent history; use `fork_turns=\"none\"` or run without `--ephemeral`."
+                .to_string(),
+        ));
+    }
+    if crosses_model_providers
+        && turn.config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID
+        && fork_mode.is_some()
+    {
+        if fork_turns_was_explicit {
+            return Err(ThreadSpawnError::Preparation(
+                "OpenAI-backed agents require `fork_turns` to be `none` when spawning across providers because encrypted history cannot be forwarded; put the needed context in `message`."
+                    .to_string(),
+            ));
+        }
+        fork_mode = None;
+    }
     let task_name = turn
         .session_source
         .get_agent_path()
@@ -211,3 +280,7 @@ pub(crate) async fn prepare(
         task_name,
     ))
 }
+
+#[cfg(test)]
+#[path = "thread_spawn_tests.rs"]
+mod tests;

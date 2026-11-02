@@ -39,6 +39,9 @@ use tracing::warn;
 #[path = "application_network.rs"]
 pub(crate) mod application_network;
 
+#[path = "provider_admission.rs"]
+mod provider_admission;
+
 /// Shared app-server entry point for loading effective Codex configuration.
 #[derive(Clone)]
 pub(crate) struct ConfigManager {
@@ -430,7 +433,7 @@ impl ConfigManager {
         Ok(CloudStartupConfig { bootstrap, config })
     }
 
-    /// Admits resumed threads and input only on the currently selected provider.
+    /// Admits the current selection and configured catalog routes without replacing thread identity.
     pub(crate) async fn check_thread_model_provider_for_input(
         &self,
         current: &Config,
@@ -439,16 +442,7 @@ impl ConfigManager {
         let configured = self
             .load_latest_config(Some(current.cwd.to_path_buf()))
             .await?;
-        if current.model_provider_id != configured.model_provider_id {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                ModelProviderError::ModelProviderMismatch {
-                    model_provider: current.model_provider_id.clone(),
-                    current_model_provider: configured.model_provider_id,
-                },
-            ));
-        }
-        Ok(())
+        provider_admission::ProviderAdmission::new(&configured).check_config(current)
     }
 
     /// Installs local policy before cloud access; failed policy loads block traffic while
@@ -551,71 +545,79 @@ impl ConfigManager {
                 .map(str::to_owned)
         });
         // Resolve the selection before the saved provider is applied as a resume override.
-        let current_provider = self
+        let current_config = self
             .load_latest_config(typesafe_overrides.cwd.clone().or_else(|| cwd.clone()))
-            .await
-            .map(|config| config.model_provider_id);
-        self.load_with_validation(
-            &self.current_cli_overrides(),
-            request_overrides,
-            typesafe_overrides,
-            cwd,
-            |config, _overrides, layers| {
-                let requested_provider = requested_provider
-                    .as_deref()
-                    .or(config.model_provider.as_deref())
-                    .unwrap_or("openai");
-                // Validate the saved route even when a client sends a provider override.
-                for provider in [
-                    saved_provider.unwrap_or(requested_provider),
-                    requested_provider,
-                ] {
-                    if let Some(required) = layers.required_model_provider()
-                        && required != provider
-                    {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::PermissionDenied,
-                            ModelProviderError::ModelProviderPolicyConflict {
-                                model_provider: provider.to_owned(),
-                                required_model_provider: required.to_owned(),
-                            },
-                        ));
+            .await;
+        let mut resume_provider = None;
+        let config = self
+            .load_with_validation(
+                &self.current_cli_overrides(),
+                request_overrides,
+                typesafe_overrides,
+                cwd,
+                |config, _overrides, layers| {
+                    let requested_provider = requested_provider
+                        .as_deref()
+                        .or(config.model_provider.as_deref())
+                        .unwrap_or("openai");
+                    // Validate the saved route even when a client sends a provider override.
+                    for provider in [
+                        saved_provider.unwrap_or(requested_provider),
+                        requested_provider,
+                    ] {
+                        if let Some(required) = layers.required_model_provider()
+                            && required != provider
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                ModelProviderError::ModelProviderPolicyConflict {
+                                    model_provider: provider.to_owned(),
+                                    required_model_provider: required.to_owned(),
+                                },
+                            ));
+                        }
+                        if !config.model_providers.contains_key(provider)
+                            && !built_in_model_providers(config.openai_base_url.clone())
+                                .contains_key(provider)
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                ModelProviderError::ModelProviderNotConfigured {
+                                    model_provider: provider.to_owned(),
+                                },
+                            ));
+                        }
                     }
-                    if !config.model_providers.contains_key(provider)
-                        && !built_in_model_providers(config.openai_base_url.clone())
-                            .contains_key(provider)
-                    {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            ModelProviderError::ModelProviderNotConfigured {
-                                model_provider: provider.to_owned(),
-                            },
-                        ));
+                    let configured = current_config?;
+                    let admission = provider_admission::ProviderAdmission::new(&configured);
+                    for provider in [
+                        saved_provider.unwrap_or(requested_provider),
+                        requested_provider,
+                    ] {
+                        admission.check_selection(provider)?;
                     }
-                }
-                let current_provider = current_provider?;
-                for provider in [
-                    saved_provider.unwrap_or(requested_provider),
-                    requested_provider,
-                ] {
-                    if provider != current_provider {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            ModelProviderError::ModelProviderMismatch {
-                                model_provider: provider.to_owned(),
-                                current_model_provider: current_provider,
-                            },
-                        ));
+                    let retained = saved_provider.unwrap_or(requested_provider);
+                    if retained != requested_provider {
+                        return Err(provider_admission::mismatch(retained, requested_provider));
                     }
-                }
-                Ok(())
-            },
-        )
-        .await
-        .and_then(|config| {
-            config.validate_windows_mxc_requirement()?;
-            Ok(config)
-        })
+                    resume_provider = Some(retained.to_owned());
+                    Ok(())
+                },
+            )
+            .await?;
+        let retained = resume_provider
+            .ok_or_else(|| std::io::Error::other("resume provider validation did not run"))?;
+        // Public model routing runs after raw provider validation. Recheck the actual route
+        // before a resumed history or an inference client can be initialized.
+        if config.model_provider_id != retained {
+            return Err(provider_admission::mismatch(
+                &retained,
+                &config.model_provider_id,
+            ));
+        }
+        self.check_thread_model_provider_for_input(&config).await?;
+        config.validate_windows_mxc_requirement()?;
+        Ok(config)
     }
 
     /// Reload sources using the task's session flags before materializing config.
@@ -721,7 +723,7 @@ impl ConfigManager {
             .thread_config_loader(Arc::clone(&self.thread_config_loader))
             .build_with_validation(validate)
             .await;
-        let mut config = result?;
+        let mut config = result.map_err(provider_admission::map_config_error)?;
         self.check_application_policy_load(&policy_load)?;
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config);
@@ -830,6 +832,10 @@ mod application_network_tests;
 #[cfg(test)]
 #[path = "config_manager_provider_tests.rs"]
 mod provider_tests;
+
+#[cfg(test)]
+#[path = "config_manager_catalog_provider_tests.rs"]
+mod catalog_provider_tests;
 
 pub(crate) fn protected_feature_keys(config_layer_stack: &ConfigLayerStack) -> BTreeSet<String> {
     let mut protected_features = config_layer_stack

@@ -1,10 +1,13 @@
 use super::*;
+use crate::agent::child_config::SpawnModelRoute;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::types::SpawnAgentForkMode;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::thread_spawn::ThreadSpawnError;
+use crate::thread_spawn::ThreadSpawnMessage;
 use crate::thread_spawn::ThreadSpawnRequest;
 use crate::tools::handlers::multi_agents::collab_tool_call_status;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
@@ -108,12 +111,14 @@ async fn handle_spawn_agent(
         payload,
         call_id,
         source,
+        tool_name,
         ..
     } = invocation;
     let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
+    let fork_turns_was_explicit = args.fork_turns.is_some();
     let message = message_content(args.message)?;
     let role_name = args
         .agent_type
@@ -121,14 +126,29 @@ async fn handle_spawn_agent(
         .map(str::trim)
         .filter(|role| !role.is_empty());
 
+    let is_external_spawn = tool_name.name == SPAWN_EXTERNAL_AGENT_TOOL_NAME;
     let spawned = crate::thread_spawn::spawn(
         &session,
         &step_context,
         &call_id,
         ThreadSpawnRequest {
             task_name: args.task_name,
-            message: agent_message_from_tool(message, &source),
+            message: if matches!(
+                source,
+                crate::tools::context::ToolCallSource::DirectPlaintextMessage
+                    | crate::tools::context::ToolCallSource::CodeMode { .. }
+            ) {
+                ThreadSpawnMessage::Plaintext(message)
+            } else {
+                ThreadSpawnMessage::ProviderEncoded(message)
+            },
             fork_mode: fork_mode.clone(),
+            fork_turns_was_explicit,
+            model_route: if is_external_spawn {
+                SpawnModelRoute::ExternalProvider
+            } else {
+                SpawnModelRoute::SessionCatalog
+            },
             agent_type: args.agent_type.clone(),
             model: args.model,
             reasoning_effort: args.reasoning_effort,

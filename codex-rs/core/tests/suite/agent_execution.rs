@@ -5,6 +5,7 @@ use codex_core::AgentTreeShutdownFailureReason;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
@@ -17,8 +18,10 @@ use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -222,7 +225,156 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     Ok(())
 }
 
-#[tokio::test]
+#[test_case(Some("none"); "explicit_fresh")]
+#[test_case(None; "implicit_fresh_across_openai_provider")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_prefix_routes_child_to_external_responses_provider(
+    fork_turns: Option<&str>,
+) -> Result<()> {
+    const EXTERNAL_MODEL: &str = "deepseek-test";
+
+    let root_server = start_mock_server().await;
+    let external_server = start_mock_server().await;
+    let mut spawn_arguments = json!({
+        "message": FIRST_TASK,
+        "task_name": "external",
+        "model": EXTERNAL_MODEL,
+    });
+    if let Some(fork_turns) = fork_turns {
+        spawn_arguments["fork_turns"] = json!(fork_turns);
+    }
+    mount_root_function_call(
+        &root_server,
+        FIRST_PROMPT,
+        "external-spawn",
+        "spawn_external_agent",
+        spawn_arguments,
+    )
+    .await;
+    let external_request = mount_sse_once(
+        &external_server,
+        sse(vec![
+            ev_response_created("external-response"),
+            ev_assistant_message("external-message", "external worker completed"),
+            ev_completed("external-response"),
+        ]),
+    )
+    .await;
+
+    let external_base_url = format!("{}/v1", external_server.uri());
+    let mut builder = test_codex()
+        .with_model("gpt-5.5")
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should enable multi_agent");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should enable multi_agent_v2");
+
+            let mut external_provider = config.model_provider.clone();
+            external_provider.name = "DeepSeek test provider".to_string();
+            external_provider.base_url = Some(external_base_url);
+            external_provider.env_key = Some("PATH".to_string());
+            external_provider.requires_openai_auth = false;
+            external_provider.supports_websockets = false;
+            config
+                .model_providers
+                .insert("deepseek".to_string(), external_provider);
+
+            let catalog_dir = config.codex_home.join("model-catalogs");
+            std::fs::create_dir_all(&catalog_dir).expect("create external model catalog directory");
+            let mut catalog = bundled_models_response().expect("bundled catalog should parse");
+            catalog.models.truncate(1);
+            catalog.models[0].slug = EXTERNAL_MODEL.to_string();
+            catalog.models[0].display_name = EXTERNAL_MODEL.to_string();
+            std::fs::write(
+                catalog_dir.join("deepseek.json"),
+                serde_json::to_string(&catalog).expect("serialize external model catalog"),
+            )
+            .expect("write external model catalog");
+        });
+    let test = builder.build(&root_server).await?;
+    test.submit_turn(FIRST_PROMPT).await?;
+
+    let child_id = test
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|thread_id| *thread_id != test.session_configured.thread_id)
+        .expect("external child thread should exist");
+    let child = test.thread_manager.get_thread(child_id).await?;
+    wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    let child_config = child.config_snapshot().await;
+    assert_eq!(
+        (
+            child_config.model_provider_id.as_str(),
+            child_config.model.as_str()
+        ),
+        ("deepseek", EXTERNAL_MODEL)
+    );
+
+    let request = external_request.single_request();
+    let body = request.body_json();
+    assert_eq!(body["model"], json!(EXTERNAL_MODEL));
+    let input = body["input"].as_array().expect("request input array");
+    assert!(input.iter().any(|item| {
+        item["type"] == "message" && item["role"] == "user" && item.to_string().contains(FIRST_TASK)
+    }));
+    assert!(!input.iter().any(|item| item["type"] == "agent_message"));
+    assert!(
+        !input
+            .iter()
+            .any(|item| { item["role"] == "user" && item.to_string().contains(FIRST_PROMPT) })
+    );
+    assert!(
+        !serde_json::to_string(input)
+            .expect("serialize request input")
+            .contains("encrypted_content")
+    );
+
+    Ok(())
+}
+
+async fn mount_root_function_call(
+    server: &wiremock::MockServer,
+    prompt: &'static str,
+    call_id: &'static str,
+    tool_name: &'static str,
+    arguments: serde_json::Value,
+) {
+    let response_id = format!("resp-{call_id}");
+    mount_sse_once_match(
+        server,
+        move |request: &wiremock::Request| body_contains(request, prompt),
+        sse(vec![
+            ev_response_created(&response_id),
+            ev_function_call(call_id, tool_name, &arguments.to_string()),
+            ev_completed(&response_id),
+        ]),
+    )
+    .await;
+
+    let completion_id = format!("resp-{call_id}-complete");
+    mount_sse_once_match(
+        server,
+        move |request: &wiremock::Request| has_function_call_output(request, call_id),
+        sse(vec![
+            ev_response_created(&completion_id),
+            ev_assistant_message(
+                &format!("msg-{call_id}-complete"),
+                &format!("{tool_name} complete"),
+            ),
+            ev_completed(&completion_id),
+        ]),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[tracing_test::traced_test]
 async fn child_turn_start_preserves_root_attribution() -> Result<()> {
     let server = start_mock_server().await;
@@ -246,8 +398,14 @@ async fn child_turn_start_preserves_root_attribution() -> Result<()> {
                 headers: Default::default(),
                 tls: None,
             };
-            config.features.enable(Feature::Collab).unwrap();
-            config.features.enable(Feature::MultiAgentV2).unwrap();
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should enable multi_agent");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should enable multi_agent_v2");
         })
         .build_with_auto_env(&server)
         .await?;
@@ -761,28 +919,77 @@ mod eviction_tests;
 
 /// Tree shutdown waits for all admitted members, even after registry removal, without crossing
 /// into another root's tree.
+#[test_case(false; "native_provider")]
+#[test_case(true; "external_provider")]
 #[tokio::test]
-async fn tree_shutdown_waits_for_children_without_affecting_other_roots() -> Result<()> {
+async fn tree_shutdown_waits_for_children_without_affecting_other_roots(
+    external_provider: bool,
+) -> Result<()> {
     use codex_core::StartThreadOptions;
     use codex_protocol::error::CodexErrorDetails;
     use codex_protocol::protocol::InternalSessionSource;
     use codex_protocol::protocol::SessionSource;
 
     let server = start_mock_server().await;
-    mount_root_collaboration_call(
-        &server,
-        FIRST_PROMPT,
-        "first-call",
-        "spawn_agent",
-        json!({"message": FIRST_TASK, "task_name": "first", "fork_turns": "none"}),
-    )
-    .await;
+    const EXTERNAL_MODEL: &str = "deepseek-tree-test";
+    if external_provider {
+        mount_root_function_call(
+            &server,
+            FIRST_PROMPT,
+            "first-call",
+            "spawn_external_agent",
+            json!({
+                "message": FIRST_TASK,
+                "task_name": "first",
+                "model": EXTERNAL_MODEL,
+                "fork_turns": "none",
+            }),
+        )
+        .await;
+    } else {
+        mount_root_collaboration_call(
+            &server,
+            FIRST_PROMPT,
+            "first-call",
+            "spawn_agent",
+            json!({"message": FIRST_TASK, "task_name": "first", "fork_turns": "none"}),
+        )
+        .await;
+    }
     mount_completed_worker(&server, FIRST_TASK, "first-call").await;
+    let external_base_url = format!("{}/v1", server.uri());
     let test = test_codex()
         .with_model("gpt-5.6-sol")
-        .with_config(|config| {
-            config.features.enable(Feature::Collab).unwrap();
-            config.features.enable(Feature::MultiAgentV2).unwrap();
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should enable multi_agent");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should enable multi_agent_v2");
+            if external_provider {
+                let mut provider = config.model_provider.clone();
+                provider.name = "External tree test provider".to_string();
+                provider.base_url = Some(external_base_url);
+                provider.env_key = Some("PATH".to_string());
+                provider.requires_openai_auth = false;
+                provider.supports_websockets = false;
+                config
+                    .model_providers
+                    .insert("deepseek".to_string(), provider);
+                let catalog_dir = config.codex_home.join("model-catalogs");
+                std::fs::create_dir_all(&catalog_dir).expect("create test catalog directory");
+                let mut catalog = bundled_models_response().expect("bundled catalog should parse");
+                catalog.models.truncate(1);
+                catalog.models[0].slug = EXTERNAL_MODEL.to_string();
+                std::fs::write(
+                    catalog_dir.join("deepseek.json"),
+                    serde_json::to_vec(&catalog).expect("serialize test catalog"),
+                )
+                .expect("write test catalog");
+            }
         })
         .build_with_auto_env(&server)
         .await?;
@@ -797,6 +1004,14 @@ async fn tree_shutdown_waits_for_children_without_affecting_other_roots() -> Res
         .expect("spawned worker");
     let worker = test.thread_manager.get_thread(worker_id).await?;
     wait_for_event(&worker, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(
+        worker.config_snapshot().await.model_provider_id,
+        if external_provider {
+            "deepseek"
+        } else {
+            "openai"
+        }
+    );
     let internal = test
         .thread_manager
         .spawn_internal_session(

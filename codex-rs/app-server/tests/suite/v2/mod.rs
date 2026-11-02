@@ -21,6 +21,8 @@ mod bedrock_gov_cloud;
 #[path = "bedrock_service_tier_tests.rs"]
 mod bedrock_service_tier;
 mod bedrock_setup;
+#[path = "catalog_provider_admission_tests.rs"]
+mod catalog_provider_admission;
 mod client_metadata;
 mod code_mode_host;
 mod collaboration_mode_list;

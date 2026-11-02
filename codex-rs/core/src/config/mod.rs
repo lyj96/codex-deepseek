@@ -121,6 +121,7 @@ use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::DenyReadValidator;
@@ -233,6 +234,16 @@ const DEFAULT_ASYNC_COMPACTION_THRESHOLD_PERCENT: u8 = 65;
 #[derive(Debug, thiserror::Error)]
 #[error("approval_policy = \"untrusted\" is no longer supported; remove this setting")]
 pub struct UnsupportedUntrustedApprovalPolicyError;
+
+/// A model alias must not change the provider selected by managed requirements.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "model provider `{model_provider}` conflicts with required provider `{required_model_provider}`"
+)]
+pub struct ModelProviderRequirementError {
+    pub model_provider: String,
+    pub required_model_provider: String,
+}
 
 /// Compatibility-only config retained so legacy `ghost_snapshot` settings
 /// continue to load even though snapshots are no longer produced.
@@ -1209,6 +1220,15 @@ pub struct Config {
     pub otel: codex_config::types::OtelConfig,
 }
 
+/// A configured external model together with the provider route used to invoke it.
+#[derive(Clone, Debug)]
+pub struct ConfiguredExternalModel {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub api_model: String,
+    pub preset: ModelPreset,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ToolRegistryConfig {
     /// Fail the turn when multiple tools share the same effective name.
@@ -1655,6 +1675,24 @@ async fn config_toml_from_layers(layers: &ConfigLayerStack) -> std::io::Result<C
 }
 
 impl Config {
+    /// Returns all valid external-provider models exposed in unified model pickers.
+    pub fn configured_external_models(&self) -> Vec<ConfiguredExternalModel> {
+        crate::agent::external_model_route::configured_external_models(self)
+    }
+
+    /// Resolves a public picker model id to its external-provider route.
+    pub fn configured_external_model(
+        &self,
+        requested_model: &str,
+    ) -> Option<ConfiguredExternalModel> {
+        crate::agent::external_model_route::configured_external_model(self, requested_model)
+    }
+
+    /// Resolves the provider that would serve a selected model.
+    pub fn provider_id_for_model(&self, requested_model: &str) -> String {
+        crate::agent::external_model_route::provider_id_for_model(self, requested_model)
+    }
+
     pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
         &self.sqlite
     }
@@ -2254,7 +2292,7 @@ pub fn validate_feature_requirements_for_config_toml(
     managed_features::validate_feature_requirements_in_config_toml(cfg, feature_requirements)
 }
 
-fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {
+pub(crate) fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {
     let file_contents = std::fs::read_to_string(path)?;
     let catalog = serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
         std::io::Error::new(
@@ -4843,6 +4881,33 @@ impl Config {
                 .unwrap_or_default(),
             otel,
         };
+        let routed_model = config.model.clone().map(|requested_model| {
+            crate::agent::external_model_route::apply_external_model_route(
+                &mut config,
+                &requested_model,
+            )
+        });
+        match routed_model.transpose().map_err(
+            crate::agent::external_model_route::ExternalModelRouteError::into_io,
+        )? {
+            Some(crate::agent::external_model_route::ExternalModelRoute::Applied {
+                model,
+                ..
+            }) => config.model = Some(model),
+            Some(crate::agent::external_model_route::ExternalModelRoute::NotMatched) | None
+                if config.model_catalog.is_none()
+                    && config.model_provider_id
+                        != codex_model_provider_info::OPENAI_PROVIDER_ID =>
+            {
+                let provider_id = config.model_provider_id.clone();
+                crate::agent::external_model_route::apply_external_provider_catalog(
+                    &mut config,
+                    &provider_id,
+                )
+                .map_err(|message| std::io::Error::new(ErrorKind::InvalidData, message))?;
+            }
+            Some(crate::agent::external_model_route::ExternalModelRoute::NotMatched) | None => {}
+        }
         if let Some(message) = config.credential_masking_warning(config.permissions.permission_profile()) {
             tracing::warn!("{message}");
             config.startup_warnings.push(message.to_string());

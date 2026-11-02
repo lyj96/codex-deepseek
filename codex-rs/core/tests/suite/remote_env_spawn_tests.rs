@@ -15,6 +15,7 @@ const FAILURE: &str = "owner could not prepare the subagent environment";
 pub(crate) enum PendingSpawnCase {
     TurnSettings,
     V1Fork,
+    ExternalFresh,
     Failure,
     FirstResultOnly,
     ChildConfiguredFirst,
@@ -60,8 +61,10 @@ pub(crate) async fn pending_subagent_scenario(
     configure_scenario: impl FnOnce(&mut Config) + Send + 'static,
 ) -> Result<Vec<Value>> {
     let v1 = matches!(case, PendingSpawnCase::V1Fork);
+    let external = matches!(case, PendingSpawnCase::ExternalFresh);
     let failed = matches!(case, PendingSpawnCase::Failure);
     let server = start_mock_server().await;
+    let external_base_url = format!("{}/v1", server.uri());
     let test = test_codex_with_wait_for_environment()
         .with_config(move |config| {
             config.project_doc_max_bytes = 0;
@@ -76,6 +79,31 @@ pub(crate) async fn pending_subagent_scenario(
                     .features
                     .set_enabled(feature, enabled)
                     .expect("configure subagent feature");
+            }
+            if external {
+                let mut provider = config.model_provider.clone();
+                provider.name = "DeepSeek test provider".to_string();
+                provider.base_url = Some(external_base_url);
+                provider.env_key = Some("PATH".to_string());
+                provider.requires_openai_auth = false;
+                provider.supports_websockets = false;
+                config
+                    .model_providers
+                    .insert("deepseek".to_string(), provider);
+
+                let catalog_dir = config.codex_home.join("model-catalogs");
+                std::fs::create_dir_all(&catalog_dir).expect("create external model catalog");
+                let mut catalog =
+                    codex_models_manager::bundled_models_response().expect("bundled model catalog");
+                catalog.models.retain(|model| model.slug == "gpt-5.5");
+                assert_eq!(catalog.models.len(), 1, "expected a classic tool model");
+                catalog.models[0].slug = "deepseek-test".to_string();
+                catalog.models[0].display_name = "DeepSeek test".to_string();
+                std::fs::write(
+                    catalog_dir.join("deepseek.json"),
+                    serde_json::to_vec(&catalog).expect("serialize external model catalog"),
+                )
+                .expect("write external model catalog");
             }
             configure_scenario(config);
         })
@@ -121,7 +149,17 @@ pub(crate) async fn pending_subagent_scenario(
                     } else {
                         json!({"task_name": "worker", "message": message, "fork_turns": "none"})
                     };
-                    tool(SPAWN, namespace, "spawn_agent", args)
+                    if external {
+                        let args = json!({
+                            "task_name": "worker",
+                            "message": message,
+                            "model": "deepseek-test",
+                            "fork_turns": "none"
+                        });
+                        ev_function_call(SPAWN, "spawn_external_agent", &args.to_string())
+                    } else {
+                        tool(SPAWN, namespace, "spawn_agent", args)
+                    }
                 }
                 1 => {
                     notify_parent_request.notify_one();
@@ -170,6 +208,11 @@ pub(crate) async fn pending_subagent_scenario(
     };
     let child_id = timeout(Duration::from_secs(/*secs*/ 10), created.recv()).await??;
     let child = test.thread_manager.get_thread(child_id).await?;
+    if external {
+        let child_config = child.config_snapshot().await;
+        assert_eq!(child_config.model_provider_id, "deepseek");
+        assert_eq!(child_config.model, "deepseek-test");
+    }
     timeout(Duration::from_secs(/*secs*/ 10), async {
         tokio::join!(parent_requested.notified(), child_requested.notified());
     })
@@ -215,7 +258,9 @@ pub(crate) async fn pending_subagent_scenario(
                 .environment_failed(&pending, FAILURE.to_string())
                 .await?
         }
-        PendingSpawnCase::V1Fork | PendingSpawnCase::FirstResultOnly => {
+        PendingSpawnCase::V1Fork
+        | PendingSpawnCase::ExternalFresh
+        | PendingSpawnCase::FirstResultOnly => {
             root.thread
                 .environment_ready(&pending, first.clone())
                 .await?;
@@ -285,6 +330,7 @@ pub(crate) async fn pending_subagent_scenario(
 }
 
 #[test_case(PendingSpawnCase::V1Fork; "v1_fork")]
+#[test_case(PendingSpawnCase::ExternalFresh; "v2_external_fresh")]
 #[test_case(PendingSpawnCase::FirstResultOnly; "v2_fresh_ignores_later_owner_update_across_turns")]
 #[test_case(PendingSpawnCase::Failure; "v2_owner_failure")]
 #[test_case(PendingSpawnCase::ChildConfiguredFirst; "v2_child_configuration_wins_over_late_owner_failure")]

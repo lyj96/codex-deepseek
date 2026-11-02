@@ -6,6 +6,9 @@ use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::McpHandler;
+use crate::tools::handlers::multi_agents_spec::FOLLOWUP_EXTERNAL_TASK_TOOL_NAME;
+use crate::tools::handlers::multi_agents_spec::SEND_EXTERNAL_MESSAGE_TOOL_NAME;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
@@ -57,6 +60,25 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
         tool_log_payload(&payload, &ToolCallSource::Direct),
         payload.log_payload()
     );
+}
+
+#[test]
+fn external_agent_tools_are_routed_as_redacted_plaintext() {
+    for tool_name in [
+        SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+        SEND_EXTERNAL_MESSAGE_TOOL_NAME,
+        FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
+    ] {
+        let call = ToolCall {
+            tool_name: ToolName::plain(tool_name),
+            call_id: "call-plaintext".to_string(),
+            payload: ToolPayload::Function {
+                arguments: json!({"message": "secret message"}).to_string(),
+            },
+            encrypted_function_args: None,
+        };
+        assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+    }
 }
 
 impl codex_extension_api::ToolContributor for ExtensionEchoContributor {

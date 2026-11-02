@@ -281,7 +281,13 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         Box::pin(
             async move {
                 let remote_models = self.get_remote_models().await;
-                construct_model_info_from_candidates(model, &remote_models, config)
+                let candidates = config
+                    .model_catalog
+                    .as_ref()
+                    .map_or(remote_models.as_slice(), |catalog| {
+                        catalog.models.as_slice()
+                    });
+                construct_model_info_from_candidates(model, candidates, config)
             }
             .instrument(tracing::info_span!("get_model_info", model = model)),
         )
@@ -539,9 +545,13 @@ impl ModelsManager for OpenAiModelsManager {
         Box::pin(async move {
             let remote = {
                 let entry = self.remote_models.read().await;
-                let models = self.models_for_entry(&entry.entry).into_models();
+                let available = self.models_for_entry(&entry.entry).into_models();
+                let models = config
+                    .model_catalog
+                    .as_ref()
+                    .map_or(available.as_ref(), |catalog| catalog.models.as_slice());
                 match &self.catalog_source {
-                    CatalogSource::Default => find_model_from_candidates(model, &models),
+                    CatalogSource::Default => find_model_from_candidates(model, models),
                     CatalogSource::ExplicitProvider(_) => models
                         .iter()
                         .find(|candidate| candidate.slug == model)
@@ -878,9 +888,15 @@ impl ModelsManager for StaticModelsManager {
         model: &'a str,
         config: &'a ModelsManagerConfig,
     ) -> ModelsManagerFuture<'a, ModelInfo> {
-        Box::pin(
-            async move { construct_model_info_from_candidates(model, &self.remote_models, config) },
-        )
+        Box::pin(async move {
+            let models = config
+                .model_catalog
+                .as_ref()
+                .map_or(self.remote_models.as_slice(), |catalog| {
+                    catalog.models.as_slice()
+                });
+            construct_model_info_from_candidates(model, models, config)
+        })
     }
 
     fn get_default_model<'a>(

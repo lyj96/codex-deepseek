@@ -297,13 +297,13 @@ impl CatalogRequestProcessor {
         let presets = self
             .model_catalog
             .list_models_from_snapshot(
-                config,
+                Arc::clone(&config),
                 models_manager,
                 codex_models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await
             .map_err(|err| config_load_error(&err))?;
-        let models = supported_models(presets, include_hidden.unwrap_or(false));
+        let models = supported_models(presets, &config, include_hidden.unwrap_or(false));
         let total = models.len();
 
         if total == 0 {

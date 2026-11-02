@@ -3,6 +3,7 @@ name: blocking-ci
 # This is the single entrypoint for checks that block a PR merge. It also runs
 # after pushes to main so the same check family stays grouped in the Actions UI.
 on:
+  workflow_call:
   pull_request: {}
   push:
     branches: [main]
@@ -10,10 +11,9 @@ on:
 jobs:
   # Keep reusable workflow calls alphabetized. The `required` job below is the
   # version-controlled list that the main-branch ruleset should require.
-  bazel:
-    name: Bazel
-    uses: ./.github/workflows/bazel.yml
-    secrets: inherit
+  fork-regressions:
+    name: Fork regressions
+    uses: ./.github/workflows/deepseek-ci.yml
 
   blob-size-policy:
     name: Blob size policy
@@ -38,12 +38,15 @@ jobs:
   rust-ci:
     name: rust-ci
     uses: ./.github/workflows/rust-ci.yml
+    with:
+      run_bazel: false
     secrets: inherit
 
   sdk:
-    name: sdk
+    name: SDK installation
     uses: ./.github/workflows/sdk.yml
-    secrets: inherit
+    with:
+      run_bazel: false
 
   required:
     name: CI required
@@ -51,7 +54,7 @@ jobs:
     # required check can appear successful instead of reporting the failure.
     if: ${{ always() }}
     needs:
-      - bazel
+      - fork-regressions
       - blob-size-policy
       - cargo-deny
       - codespell

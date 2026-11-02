@@ -2,11 +2,40 @@ use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelServiceTier;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
+use codex_core::config::Config;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
-pub fn supported_models(models: Vec<ModelPreset>, include_hidden: bool) -> Vec<Model> {
-    models
+pub fn supported_models(
+    mut presets: Vec<ModelPreset>,
+    config: &Config,
+    include_hidden: bool,
+) -> Vec<Model> {
+    let configured_models = config.configured_external_models();
+    let default_model_id = configured_models
+        .iter()
+        .find(|model| {
+            model.provider_id == config.model_provider_id
+                && config.model.as_deref() == Some(model.api_model.as_str())
+        })
+        .map(|model| model.preset.id.clone());
+    // Retain the catalog's default unless a configured route supplies the
+    // selected provider/model's public ID. A custom provider can use native
+    // catalog discovery without having any managed external routes.
+    if let Some(default_model_id) = &default_model_id {
+        for preset in &mut presets {
+            preset.is_default = &preset.id == default_model_id;
+        }
+    }
+    for external in configured_models {
+        if presets.iter().any(|preset| preset.id == external.preset.id) {
+            continue;
+        }
+        let mut preset = external.preset;
+        preset.is_default = default_model_id.as_deref() == Some(preset.id.as_str());
+        presets.push(preset);
+    }
+    presets
         .into_iter()
         .filter(|preset| include_hidden || preset.show_in_picker)
         .map(model_from_preset)

@@ -1,0 +1,409 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo="lyj96/codex-deepseek"
+asset="codex-deepseek-package-x86_64-unknown-linux-musl.tar.gz"
+catalog_asset="deepseek-models.json"
+install_dir="${HOME}/.local/share/codex-deepseek"
+deepseek_key="${DEEPSEEK_API_KEY:-}"
+release_tag="latest"
+ssh_host=""
+discover_ssh=false
+update_remotes_only=false
+assume_yes=false
+ssh_remote=false
+restore_ssh=false
+configure_provider=false
+registry_dir="${XDG_CONFIG_HOME:-$HOME/.config}/codex-deepseek"
+managed_hosts_file="$registry_dir/ssh-hosts"
+state_dir="$HOME/.config/codex-deepseek"
+secret_dir="$state_dir"
+secret_file="$secret_dir/env"
+
+usage() {
+  cat <<'EOF'
+Usage: install-linux.sh [--install-dir PATH] [--deepseek-key KEY] [--release TAG]
+                        [--ssh-host HOST | --discover-ssh | --update-remotes]
+                        [--configure-provider] [--yes]
+
+Remote host options currently support Linux x86_64 SSH targets.
+--ssh-remote and --restore-ssh are intended to run on the remote host.
+EOF
+}
+
+validate_release_tag() {
+  [[ "$release_tag" == "latest" || "$release_tag" =~ ^codex-v[0-9]+\.[0-9]+\.[0-9]+-deepseek\.[1-9][0-9]*$ ]] || {
+    echo "Invalid release tag: $release_tag" >&2
+    exit 2
+  }
+}
+
+validate_ssh_host() {
+  local host="$1"
+  [[ -n "$host" && "$host" != -* && "$host" =~ ^[A-Za-z0-9_.@:-]+$ ]] || {
+    echo "Invalid SSH host or alias: $host" >&2
+    exit 2
+  }
+}
+
+remote_installer_url() {
+  if [[ "$release_tag" == "latest" ]]; then
+    printf 'https://github.com/%s/releases/latest/download/install-linux.sh\n' "$repo"
+  else
+    printf 'https://github.com/%s/releases/download/%s/install-linux.sh\n' "$repo" "$release_tag"
+  fi
+}
+
+register_managed_host() {
+  local host="$1"
+  mkdir -p "$registry_dir"
+  touch "$managed_hosts_file"
+  grep -Fqx "$host" "$managed_hosts_file" || printf '%s\n' "$host" >> "$managed_hosts_file"
+}
+
+list_discovered_hosts() {
+  local ssh_config="$HOME/.ssh/config"
+  [[ -r "$ssh_config" ]] || {
+    echo "No readable SSH config found at: $ssh_config"
+    return
+  }
+  echo "SSH host candidates from $ssh_config:"
+  awk '
+    tolower($1) == "host" {
+      for (i = 2; i <= NF; i++) {
+        if ($i !~ /[*!?]/ && $i !~ /^!/) print $i
+      }
+    }
+  ' "$ssh_config" | sort -u | while IFS= read -r host; do
+    if [[ -r "$managed_hosts_file" ]] && grep -Fqx "$host" "$managed_hosts_file"; then
+      printf '  %s (managed)\n' "$host"
+    else
+      printf '  %s\n' "$host"
+    fi
+  done
+  echo "Install and register one with: --ssh-host HOST"
+}
+
+load_local_deepseek_key() {
+  if [[ -z "$deepseek_key" && -r "$secret_file" ]]; then
+    DEEPSEEK_API_KEY=""
+    # This file is created mode 0600 by this installer and belongs to the current user.
+    . "$secret_file"
+    deepseek_key="${DEEPSEEK_API_KEY:-}"
+  fi
+  [[ "$deepseek_key" != *$'\n'* && "$deepseek_key" != *$'\r'* ]] || {
+    echo "DeepSeek API Key cannot contain a newline." >&2
+    exit 1
+  }
+}
+
+sync_managed_provider_files() {
+  local host="$1"
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local managed_dir="$codex_home/codex-dp"
+  local entries=(providers.toml)
+  [[ -r "$managed_dir/providers.toml" ]] || return 0
+  [[ ! -r "$managed_dir/secrets.json" ]] || entries+=(secrets.json)
+  echo "Syncing managed provider configuration to SSH host: $host"
+  tar -C "$managed_dir" -czf - "${entries[@]}" | ssh -- "$host" \
+    'set -eu; umask 077; mkdir -p "$HOME/.codex/codex-dp"; tar -xzf - -C "$HOME/.codex/codex-dp"; chmod 600 "$HOME/.codex/codex-dp/providers.toml"; test ! -f "$HOME/.codex/codex-dp/secrets.json" || chmod 600 "$HOME/.codex/codex-dp/secrets.json"; "$HOME/.local/bin/codex" provider apply'
+}
+
+install_remote_host() {
+  local host="$1"
+  local forward_key="${2:-}"
+  local installer_url url_q tag_q remote_command
+  validate_ssh_host "$host"
+  command -v ssh >/dev/null 2>&1 || { echo "OpenSSH client 'ssh' is required." >&2; return 1; }
+  installer_url="$(remote_installer_url)"
+  printf -v url_q '%q' "$installer_url"
+  printf -v tag_q '%q' "$release_tag"
+  remote_command="set -eu; platform=\$(uname -s)/\$(uname -m); if [ \"\$platform\" != Linux/x86_64 ]; then echo \"Unsupported remote platform: \$platform (expected Linux/x86_64)\" >&2; exit 1; fi; tmp=\$(mktemp \"\${TMPDIR:-/tmp}/codex-deepseek-installer.XXXXXX\"); trap 'rm -f \"\$tmp\"' EXIT; curl -fL --retry 3 $url_q -o \"\$tmp\"; chmod 700 \"\$tmp\"; bash \"\$tmp\" --ssh-remote --release $tag_q"
+  echo "Installing Codex DeepSeek on SSH host: $host"
+  if [[ -n "$forward_key" ]]; then
+    remote_command="IFS= read -r DEEPSEEK_API_KEY; DEEPSEEK_API_KEY=\$(printf '%s' \"\$DEEPSEEK_API_KEY\" | tr -d '\\r'); export DEEPSEEK_API_KEY; $remote_command"
+    printf '%s\n' "$forward_key" | ssh -- "$host" "$remote_command"
+  else
+    ssh -t -- "$host" "$remote_command"
+  fi
+  sync_managed_provider_files "$host"
+  register_managed_host "$host"
+  echo "Registered managed SSH host: $host"
+}
+
+update_managed_remotes() {
+  local desired_version="${1:-}"
+  local host remote_version found=false failed=false
+  [[ -s "$managed_hosts_file" ]] || {
+    echo "No managed SSH hosts. Register one with --ssh-host HOST."
+    return 0
+  }
+  while IFS= read -r host; do
+    [[ -n "$host" ]] || continue
+    found=true
+    if remote_version="$(ssh -o BatchMode=yes -o ConnectTimeout=8 -- "$host" 'test -f "$HOME/.config/codex-deepseek/ssh-managed" && sed -n "s/^package_version=//p" "$HOME/.config/codex-deepseek/ssh-managed"' 2>/dev/null)"; then
+      if [[ -n "$desired_version" && "$remote_version" == "$desired_version" ]]; then
+        echo "Already current on SSH host: $host ($desired_version)"
+        sync_managed_provider_files "$host" || failed=true
+        continue
+      fi
+      install_remote_host "$host" || failed=true
+    else
+      echo "Skipping unavailable or unmanaged SSH host: $host" >&2
+      failed=true
+    fi
+  done < "$managed_hosts_file"
+  [[ "$found" == true ]] || echo "No managed SSH hosts."
+  [[ "$failed" == false ]]
+}
+
+offer_remote_updates() {
+  local desired_version="${1:-}"
+  [[ -s "$managed_hosts_file" ]] || return 0
+  if [[ "$assume_yes" == true ]]; then
+    update_managed_remotes "$desired_version" || echo "One or more managed SSH hosts could not be updated." >&2
+    return
+  fi
+  local answer=""
+  if [[ -r /dev/tty ]]; then
+    read -r -p "Update registered SSH hosts with this release? [y/N] " answer </dev/tty
+  fi
+  if [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+    update_managed_remotes "$desired_version" || echo "One or more managed SSH hosts could not be updated." >&2
+  else
+    echo "Remote hosts were not changed. Run again with --update-remotes when ready."
+  fi
+}
+
+restore_remote_launcher() {
+  local launcher="$HOME/.local/bin/codex"
+  local wrapper_file="$state_dir/ssh-wrapper-path"
+  local backup_file="$state_dir/ssh-backup-path"
+  local expected_wrapper="" backup_path=""
+  [[ -r "$wrapper_file" ]] || { echo "No managed SSH launcher state found." >&2; exit 1; }
+  IFS= read -r expected_wrapper < "$wrapper_file"
+  if [[ -L "$launcher" && "$(readlink "$launcher")" == "$expected_wrapper" ]]; then
+    rm -- "$launcher"
+  elif [[ -e "$launcher" || -L "$launcher" ]]; then
+    echo "Refusing to replace an SSH launcher that is no longer managed by this installer: $launcher" >&2
+    exit 1
+  fi
+  if [[ -r "$backup_file" ]]; then
+    IFS= read -r backup_path < "$backup_file"
+    case "$backup_path" in
+      "$HOME/.local/bin/codex.before-deepseek."*)
+        [[ -e "$backup_path" || -L "$backup_path" ]] && mv -- "$backup_path" "$launcher"
+        ;;
+      *) echo "Ignoring invalid backup path in $backup_file" >&2 ;;
+    esac
+  fi
+  rm -f -- "$state_dir/ssh-managed" "$wrapper_file" "$backup_file"
+  echo "Restored the previous remote codex launcher."
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --install-dir) install_dir="${2:?missing path after --install-dir}"; shift 2 ;;
+    --deepseek-key) deepseek_key="${2:?missing key after --deepseek-key}"; shift 2 ;;
+    --release) release_tag="${2:?missing tag after --release}"; shift 2 ;;
+    --ssh-host) ssh_host="${2:?missing host after --ssh-host}"; shift 2 ;;
+    --discover-ssh) discover_ssh=true; shift ;;
+    --update-remotes) update_remotes_only=true; shift ;;
+    --yes) assume_yes=true; shift ;;
+    --ssh-remote) ssh_remote=true; shift ;;
+    --restore-ssh) restore_ssh=true; shift ;;
+    --configure-provider) configure_provider=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+validate_release_tag
+mode_count=0
+[[ "$restore_ssh" == false ]] || mode_count=$((mode_count + 1))
+[[ "$discover_ssh" == false ]] || mode_count=$((mode_count + 1))
+[[ -z "$ssh_host" ]] || mode_count=$((mode_count + 1))
+[[ "$update_remotes_only" == false ]] || mode_count=$((mode_count + 1))
+[[ "$ssh_remote" == false ]] || mode_count=$((mode_count + 1))
+[[ "$mode_count" -le 1 ]] || { echo "Choose only one SSH operation at a time." >&2; exit 2; }
+if [[ "$restore_ssh" == true ]]; then
+  restore_remote_launcher
+  exit 0
+fi
+if [[ "$discover_ssh" == true ]]; then
+  list_discovered_hosts
+  exit 0
+fi
+if [[ -n "$ssh_host" ]]; then
+  load_local_deepseek_key
+  install_remote_host "$ssh_host" "$deepseek_key"
+  exit 0
+fi
+if [[ "$update_remotes_only" == true ]]; then
+  update_managed_remotes
+  exit 0
+fi
+
+[[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]] || {
+  echo "This installer only supports Linux x86_64." >&2
+  exit 1
+}
+[[ "$install_dir" != *$'\n'* && "$install_dir" != *$'\r'* ]] || {
+  echo "Install path cannot contain a newline." >&2
+  exit 1
+}
+[[ "$install_dir" == /* ]] || install_dir="$PWD/$install_dir"
+install_dir="${install_dir%/}"
+[[ -n "$install_dir" && "$install_dir" != "/" ]] || {
+  echo "Install path cannot be the filesystem root." >&2
+  exit 1
+}
+load_local_deepseek_key
+if [[ -z "$deepseek_key" ]]; then
+  read -r -s -p "DeepSeek API Key: " deepseek_key </dev/tty
+  echo
+fi
+[[ -n "$deepseek_key" ]] || { echo "DeepSeek API Key cannot be empty." >&2; exit 1; }
+[[ "$deepseek_key" != *$'\n'* && "$deepseek_key" != *$'\r'* ]] || {
+  echo "DeepSeek API Key cannot contain a newline." >&2
+  exit 1
+}
+
+if [[ "$release_tag" == "latest" ]]; then
+  download_root="https://github.com/${repo}/releases/latest/download"
+else
+  download_root="https://github.com/${repo}/releases/download/${release_tag}"
+fi
+
+temp_root="${TMPDIR:-/tmp}"
+temp_root="${temp_root%/}"
+temp_dir="$(mktemp -d "$temp_root/codex-deepseek.XXXXXX")"
+cleanup() {
+  case "$temp_dir" in
+    "$temp_root"/codex-deepseek.*) rm -rf -- "$temp_dir" ;;
+  esac
+}
+trap cleanup EXIT
+mkdir -p "$temp_dir/package"
+curl -fL --retry 3 "$download_root/$asset" -o "$temp_dir/$asset"
+curl -fL --retry 3 "$download_root/$catalog_asset" -o "$temp_dir/$catalog_asset"
+curl -fL --retry 3 "$download_root/SHA256SUMS" -o "$temp_dir/SHA256SUMS"
+for download in "$asset" "$catalog_asset"; do
+  expected_hash="$(awk -v name="$download" '$2 == name || $2 == "*" name { print $1; exit }' "$temp_dir/SHA256SUMS")"
+  [[ -n "$expected_hash" ]] || { echo "SHA256SUMS does not contain $download." >&2; exit 1; }
+  actual_hash="$(sha256sum "$temp_dir/$download" | awk '{print $1}')"
+  [[ "$actual_hash" == "$expected_hash" ]] || { echo "SHA-256 verification failed for $download." >&2; exit 1; }
+done
+tar -xzf "$temp_dir/$asset" -C "$temp_dir/package"
+[[ -x "$temp_dir/package/bin/codex" ]] || {
+  echo "Downloaded package does not contain bin/codex." >&2
+  exit 1
+}
+"$temp_dir/package/bin/codex" --version
+
+mkdir -p "$install_dir"
+current_dir="$install_dir/current"
+backup_dir=""
+if [[ -e "$current_dir" ]]; then
+  backup_dir="$install_dir/previous-$(date +%Y%m%d%H%M%S)-$$"
+  mv "$current_dir" "$backup_dir"
+fi
+if ! mv "$temp_dir/package" "$current_dir"; then
+  [[ -n "$backup_dir" && ! -e "$current_dir" ]] && mv "$backup_dir" "$current_dir"
+  exit 1
+fi
+package_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$current_dir/codex-package.json" | head -n1)"
+[[ -n "$package_version" ]] || { echo "Installed package metadata does not contain a version." >&2; exit 1; }
+
+DEEPSEEK_API_KEY="$deepseek_key" "$current_dir/bin/codex" provider init-deepseek \
+  --store-key-from-env DEEPSEEK_API_KEY
+"$current_dir/bin/codex" features enable multi_agent_v2
+if [[ "$configure_provider" == true ]]; then
+  [[ -r /dev/tty ]] || { echo "--configure-provider requires an interactive terminal." >&2; exit 1; }
+  "$current_dir/bin/codex" provider add </dev/tty
+fi
+
+mkdir -p "$secret_dir"
+chmod 700 "$secret_dir"
+escaped_key="${deepseek_key//\'/\'\"\'\"\'}"
+printf "DEEPSEEK_API_KEY='%s'\n" "$escaped_key" > "$secret_file"
+chmod 600 "$secret_file"
+
+wrapper="$install_dir/codex-dp"
+{
+  printf '%s\n' '#!/bin/sh'
+  printf 'if [ -r %q ]; then . %q; fi\n' "$secret_file" "$secret_file"
+  printf '%s\n' 'export DEEPSEEK_API_KEY'
+  printf 'exec %q "$@"\n' "$current_dir/bin/codex"
+} > "$wrapper"
+chmod 700 "$wrapper"
+
+bin_dir="$HOME/.local/bin"
+mkdir -p "$bin_dir"
+primary_launcher="$bin_dir/codex-dp"
+legacy_launcher="$bin_dir/codex-deepseek"
+if [[ ! -e "$primary_launcher" && ! -L "$primary_launcher" ]] ||
+   [[ -L "$primary_launcher" && ("$(readlink "$primary_launcher")" == "$wrapper" || "$(readlink "$primary_launcher")" == "$install_dir/codex-deepseek") ]]; then
+  ln -sfn "$wrapper" "$primary_launcher"
+else
+  echo "Keeping existing codex-dp launcher: $primary_launcher"
+fi
+# Compatibility for installations made before the CLI name was unified.
+ln -sfn "$wrapper" "$legacy_launcher"
+if [[ "$ssh_remote" == true ]]; then
+  ssh_launcher="$bin_dir/codex"
+  wrapper_file="$state_dir/ssh-wrapper-path"
+  backup_file="$state_dir/ssh-backup-path"
+  if [[ ! -L "$ssh_launcher" || "$(readlink "$ssh_launcher")" != "$wrapper" ]]; then
+    replaced_launcher=""
+    if [[ -e "$ssh_launcher" || -L "$ssh_launcher" ]]; then
+      replaced_launcher="$bin_dir/codex.before-deepseek.$(date +%Y%m%d%H%M%S)-$$"
+      mv -- "$ssh_launcher" "$replaced_launcher"
+    fi
+    if ! ln -sfn "$wrapper" "$ssh_launcher"; then
+      [[ -z "$replaced_launcher" ]] || mv -- "$replaced_launcher" "$ssh_launcher"
+      exit 1
+    fi
+    if [[ -n "$replaced_launcher" && ! -s "$backup_file" ]]; then
+      printf '%s\n' "$replaced_launcher" > "$backup_file"
+    fi
+  fi
+  printf '%s\n' "$wrapper" > "$wrapper_file"
+  {
+    printf 'release=%s\n' "$release_tag"
+    printf 'package_version=%s\n' "$package_version"
+    printf '%s\n' 'target=x86_64-unknown-linux-musl'
+  } > "$state_dir/ssh-managed"
+fi
+profile_path="$HOME/.profile"
+touch "$profile_path"
+if ! grep -Fq '# BEGIN CODEX DEEPSEEK' "$profile_path"; then
+  [[ ! -s "$profile_path" ]] || cp "$profile_path" "$profile_path.bak.$(date +%Y%m%d%H%M%S)"
+  {
+    printf '\n%s\n' '# BEGIN CODEX DEEPSEEK'
+    printf 'export CODEX_CLI_PATH=%q\n' "$wrapper"
+    printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"'
+    printf '%s\n' '# END CODEX DEEPSEEK'
+  } >> "$profile_path"
+fi
+export CODEX_CLI_PATH="$wrapper"
+export DEEPSEEK_API_KEY="$deepseek_key"
+
+removed_previous=0
+for previous_dir in "$install_dir"/previous-*; do
+  [[ -e "$previous_dir" || -L "$previous_dir" ]] || continue
+  rm -rf -- "$previous_dir"
+  removed_previous=$((removed_previous + 1))
+done
+
+echo "Installed Codex DeepSeek to: $current_dir"
+echo "CLI command: codex-dp"
+[[ "$ssh_remote" == false ]] || echo "Remote Codex command: $bin_dir/codex"
+[[ "$removed_previous" -eq 0 ]] || echo "Removed $removed_previous previous installation backup(s)."
+if [[ "$ssh_remote" == true ]]; then
+  PATH="$bin_dir:$PATH" codex --version
+  echo "Reconnect this SSH host in Codex Desktop to use the updated app server."
+else
+  echo "Open a new shell before using codex-dp."
+  offer_remote_updates "$package_version"
+fi

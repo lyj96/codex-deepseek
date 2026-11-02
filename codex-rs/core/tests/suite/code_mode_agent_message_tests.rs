@@ -21,18 +21,24 @@ use serde_json::Value;
 use serde_json::json;
 use wiremock::matchers::header;
 
+#[test_case::test_case(false; "native_openai")]
+#[test_case::test_case(true; "external_provider")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_spawn_delivers_plaintext() -> Result<()> {
+async fn code_mode_spawn_delivers_plaintext(external_provider: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let code_mode_host_program = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
     let server = start_mock_server().await;
     let test = test_codex()
+        .with_code_mode_host_program(code_mode_host_program)
         .with_model("gpt-5.6-sol")
         .with_model_info_override("gpt-5.6-sol", |model| {
             model.tool_mode = Some(ToolMode::CodeMode);
             model.use_responses_lite = true;
         })
-        .with_config(|config| {
+        .with_config(move |config| {
+            // Isolate task encoding from the fresh child's own environment context.
+            config.include_environment_context = false;
             for feature in [
                 Feature::Collab,
                 Feature::MultiAgentV2,
@@ -45,6 +51,29 @@ async fn code_mode_spawn_delivers_plaintext() -> Result<()> {
                     .expect("enable test feature");
             }
             config.multi_agent_v2.non_code_mode_only = false;
+            if external_provider {
+                let mut provider = config.model_provider.clone();
+                provider.requires_openai_auth = false;
+                provider.env_key = Some("PATH".to_string());
+                config
+                    .model_providers
+                    .insert("deepseek".to_string(), provider);
+                let directory = config.codex_home.join("model-catalogs");
+                std::fs::create_dir_all(&directory).expect("test catalog directory");
+                let mut catalog =
+                    codex_models_manager::bundled_models_response().expect("bundled test catalog");
+                catalog.models.truncate(1);
+                let model = &mut catalog.models[0];
+                model.slug = "deepseek-code-mode-test".to_string();
+                model.display_name = model.slug.clone();
+                model.use_responses_lite = false;
+                model.tool_mode = None;
+                std::fs::write(
+                    directory.join("deepseek.json"),
+                    serde_json::to_vec(&catalog).expect("serialize test catalog"),
+                )
+                .expect("write test catalog");
+            }
         })
         .build_with_auto_env(&server)
         .await?;
@@ -59,7 +88,11 @@ async fn code_mode_spawn_delivers_plaintext() -> Result<()> {
             ev_custom_tool_call(
                 "spawn-worker",
                 "exec",
-                r#"text(await tools.collaboration__spawn_agent({task_name: "worker", message: "Summarize the three stories.", fork_turns: "all"}));"#,
+                if external_provider {
+                    r#"text(await tools.spawn_external_agent({task_name: "worker", model: "deepseek-code-mode-test", message: "Summarize the three stories.", fork_turns: "none"}));"#
+                } else {
+                    r#"text(await tools.collaboration__spawn_agent({task_name: "worker", message: "Summarize the three stories.", fork_turns: "all"}));"#
+                },
             ),
             ev_completed("spawn"),
         ]),
@@ -95,20 +128,39 @@ async fn code_mode_spawn_delivers_plaintext() -> Result<()> {
         .into_iter()
         .find(|request| request.header("thread-id") == Some(child_id.to_string()))
         .expect("child receives its task");
-    assert_eq!(
-        strip_response_item_ids_from_json(strip_metadata_from_json(Value::Array(
-            child_request.inputs_of_type("agent_message"),
-        ))),
-        json!([{
-            "type": "agent_message",
-            "author": "/root",
-            "recipient": "/root/worker",
-            "content": [{
-                "type": "input_text",
-                "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\nSummarize the three stories.",
-            }],
-        }]),
-    );
+    let task = "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\nSummarize the three stories.";
+    if external_provider {
+        assert!(child_request.inputs_of_type("agent_message").is_empty());
+        let input = child_request.body_json()["input"].to_string();
+        assert!(!input.contains("encrypted_content"));
+        assert!(!input.contains("Delegate the summary task."));
+        let messages = child_request
+            .inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item["role"] == "user")
+            .collect();
+        assert_eq!(
+            strip_response_item_ids_from_json(strip_metadata_from_json(Value::Array(messages))),
+            json!([{"type": "message", "role": "user", "content": [{"type": "input_text", "text": task}]}]),
+        );
+        let config = child.config_snapshot().await;
+        assert_eq!(
+            (config.model_provider_id.as_str(), config.model.as_str()),
+            ("deepseek", "deepseek-code-mode-test"),
+        );
+    } else {
+        assert_eq!(
+            strip_response_item_ids_from_json(strip_metadata_from_json(Value::Array(
+                child_request.inputs_of_type("agent_message"),
+            ))),
+            json!([{
+                "type": "agent_message",
+                "author": "/root",
+                "recipient": "/root/worker",
+                "content": [{"type": "input_text", "text": task}],
+            }]),
+        );
+    }
     assert_eq!(test.thread_manager.list_thread_ids().await.len(), 2);
     Ok(())
 }

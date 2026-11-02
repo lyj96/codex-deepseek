@@ -1,0 +1,8 @@
+{
+  "approvedOn": "2026-10-29",
+  "decision": "Standing user authorization: accept security risks inherited unchanged from official OpenAI Codex stable, continue real scans and wait for official fixes; no per-ID or per-release reauthorization.",
+  "baseVersion": "0.166.0",
+  "officialCommit": "6ff1e1ca3b30fc8b914720681fcf5fe62e95f856",
+  "officialLockSha256": "22bd51f50864ce40f6686f3350c0547fdd50a8213240f54435ed394f68bf08e6",
+  "scope": "Exact package name, version, source and checksum matching a verified official-stable Cargo.lock. Fork-only risks and scanner execution failures remain blocking. Acceptance is not remediation."
+}

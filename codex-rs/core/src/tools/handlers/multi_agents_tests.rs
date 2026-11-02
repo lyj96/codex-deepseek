@@ -21,6 +21,8 @@ use crate::session::turn_context::TurnContext;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::multi_agents_spec::SEND_EXTERNAL_MESSAGE_TOOL_NAME;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
@@ -56,7 +58,9 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -115,7 +119,12 @@ fn invocation(
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
         call_id: "call-1".to_string(),
         tool_name: codex_tools::ToolName::plain(tool_name),
-        source: crate::tools::context::ToolCallSource::Direct,
+        // Mirror the router's explicit plaintext source for the external tool.
+        source: if tool_name == SPAWN_EXTERNAL_AGENT_TOOL_NAME {
+            crate::tools::context::ToolCallSource::DirectPlaintextMessage
+        } else {
+            crate::tools::context::ToolCallSource::Direct
+        },
         payload,
         environments: Default::default(),
     }
@@ -191,6 +200,131 @@ model_reasoning_effort = "minimal"
     turn.config = Arc::new(config);
 
     role_name
+}
+
+async fn install_personal_cross_provider_role(turn: &mut TurnContext) -> String {
+    let role_name = "external-worker".to_string();
+    let role_dir = turn.config.codex_home.as_path().join("agents");
+    tokio::fs::create_dir_all(&role_dir)
+        .await
+        .expect("personal agent directory should be created");
+    let role_config_path = role_dir.join("external-worker.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"model = "external-code-model"
+model_provider = "ollama"
+model_reasoning_effort = "minimal"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let mut config = (*turn.config).clone();
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Personal external provider worker".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    role_name
+}
+
+async fn install_deepseek_provider_with_catalog(turn: &mut TurnContext) {
+    let catalog_dir = turn.config.codex_home.as_path().join("model-catalogs");
+    tokio::fs::create_dir_all(&catalog_dir)
+        .await
+        .expect("external model catalog directory should be created");
+
+    let mut flash_model = turn.model_info().as_ref().clone();
+    flash_model.slug = "deepseek-flash".to_string();
+    flash_model.display_name = "DeepSeek Flash".to_string();
+    flash_model.description = Some("Fast external coding model".to_string());
+    flash_model.supported_reasoning_levels = vec![ReasoningEffortPreset {
+        effort: ReasoningEffort::High,
+        description: "High reasoning effort".to_string(),
+    }];
+    flash_model.default_reasoning_level = Some(ReasoningEffort::High);
+    let mut pro_model = flash_model.clone();
+    pro_model.slug = "deepseek-v4-pro".to_string();
+    pro_model.display_name = "DeepSeek V4 Pro".to_string();
+    let catalog_path = catalog_dir.join("deepseek.json");
+    tokio::fs::write(
+        &catalog_path,
+        serde_json::to_vec_pretty(&ModelsResponse {
+            models: vec![flash_model, pro_model],
+        })
+        .expect("external model catalog should serialize"),
+    )
+    .await
+    .expect("external model catalog should be written");
+
+    let mut config = (*turn.config).clone();
+    config.model_providers.insert(
+        "deepseek".to_string(),
+        built_in_model_providers(/*openai_base_url*/ None)["ollama"].clone(),
+    );
+    turn.config = Arc::new(config);
+}
+
+async fn install_qwen_provider_with_catalog(turn: &mut TurnContext) {
+    let catalog_dir = turn.config.codex_home.as_path().join("model-catalogs");
+    tokio::fs::create_dir_all(&catalog_dir)
+        .await
+        .expect("external model catalog directory should be created");
+
+    let mut model = turn.model_info().as_ref().clone();
+    model.slug = "qwen-flash".to_string();
+    model.display_name = "Qwen Flash".to_string();
+    model.description = Some("Fast external coding model".to_string());
+    model.supported_reasoning_levels = vec![ReasoningEffortPreset {
+        effort: ReasoningEffort::High,
+        description: "High reasoning effort".to_string(),
+    }];
+    model.default_reasoning_level = Some(ReasoningEffort::High);
+    tokio::fs::write(
+        catalog_dir.join("qwen.json"),
+        serde_json::to_vec_pretty(&ModelsResponse {
+            models: vec![model],
+        })
+        .expect("external model catalog should serialize"),
+    )
+    .await
+    .expect("external model catalog should be written");
+
+    let mut config = (*turn.config).clone();
+    config.model_providers.insert(
+        "qwen".to_string(),
+        built_in_model_providers(/*openai_base_url*/ None)["ollama"].clone(),
+    );
+    turn.config = Arc::new(config);
+}
+
+async fn install_external_model_route(turn: &TurnContext, public_model: &str, api_model: &str) {
+    let routes_path = turn
+        .config
+        .codex_home
+        .as_path()
+        .join("model-catalogs")
+        .join("routes.json");
+    tokio::fs::write(
+        &routes_path,
+        serde_json::to_vec_pretty(&json!({
+            "version": 1,
+            "models": {
+                public_model: {
+                    "provider": "deepseek",
+                    "api_model": api_model
+                }
+            }
+        }))
+        .expect("external model routes should serialize"),
+    )
+    .await
+    .expect("external model routes should be written");
 }
 
 fn set_turn_config(turn: &mut TurnContext, config: crate::config::Config) {
@@ -984,6 +1118,441 @@ async fn multi_agent_v2_spawn_without_history_allows_agent_type_override() {
     assert_eq!(snapshot.model, "gpt-5-role-override");
     assert_eq!(snapshot.model_provider_id, parent_provider_id);
     assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_personal_cross_provider_role(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    set_agent_control(&mut session, manager.agent_control());
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let mut call = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "task_name": "external",
+            "agent_type": role_name
+        })),
+    );
+    call.source = crate::tools::context::ToolCallSource::DirectPlaintextMessage;
+    let output = SpawnAgentHandlerV2::default()
+        .handle(call)
+        .await
+        .expect("cross-provider spawn should use an isolated child by default");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn result should be json");
+    assert_eq!(result["task_name"], "/root/external");
+
+    let (agent_id, communication) = manager
+        .captured_ops()
+        .into_iter()
+        .find_map(|(thread_id, op)| match op {
+            Op::InterAgentCommunication { communication, .. }
+                if communication.recipient.as_str() == "/root/external" =>
+            {
+                Some((thread_id, communication))
+            }
+            _ => None,
+        })
+        .expect("spawned external agent should receive a task");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned external agent should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "external-code-model");
+    assert_eq!(snapshot.model_provider_id, "ollama");
+    assert!(communication.encrypted_content.is_none());
+    assert!(
+        communication
+            .content
+            .ends_with("Payload:\ninspect this repo")
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without_agent_type() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    set_agent_control(&mut session, manager.agent_control());
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "deepseek_flash",
+                "model": "deepseek-flash",
+                "reasoning_effort": "high",
+                "fork_turns": "none"
+            })),
+        ))
+        .await
+        .expect("provider-prefixed model should route without an explicit agent type");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn result should be json");
+    assert_eq!(result["task_name"], "/root/deepseek_flash");
+
+    let (agent_id, communication) = manager
+        .captured_ops()
+        .into_iter()
+        .find_map(|(thread_id, op)| match op {
+            Op::InterAgentCommunication { communication, .. }
+                if communication.recipient.as_str() == "/root/deepseek_flash" =>
+            {
+                Some((thread_id, communication))
+            }
+            _ => None,
+        })
+        .expect("spawned external agent should receive a task");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned external agent should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "deepseek-flash");
+    assert_eq!(snapshot.model_provider_id, "deepseek");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(snapshot.session_source.get_agent_role(), None);
+    assert!(communication.encrypted_content.is_none());
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_send_external_message_uses_plaintext() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    set_agent_control(&mut session, manager.agent_control());
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "boot external worker",
+                "task_name": "external_worker",
+                "model": "deepseek-flash",
+                "fork_turns": "none"
+            })),
+        ))
+        .await
+        .expect("external worker should spawn");
+    let child_thread_id = session
+        .services
+        .local_agent_runtime
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "external_worker")
+        .await
+        .expect("external worker should resolve");
+
+    let encrypted_error = SendMessageHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "send_message",
+            function_payload(json!({
+                "target": "external_worker",
+                "message": "opaque encrypted content"
+            })),
+        ))
+        .await
+        .err()
+        .expect("encrypted send_message must reject an external recipient");
+    assert!(matches!(
+        encrypted_error,
+        FunctionCallError::RespondToModel(ref message)
+            if message.contains("cannot be sent to an external provider")
+    ));
+
+    let mut send_invocation = invocation(
+        session,
+        turn,
+        SEND_EXTERNAL_MESSAGE_TOOL_NAME,
+        function_payload(json!({
+            "target": "external_worker",
+            "message": "check the next file"
+        })),
+    );
+    send_invocation.source = crate::tools::context::ToolCallSource::DirectPlaintextMessage;
+    SendMessageHandlerV2
+        .handle(send_invocation)
+        .await
+        .expect("send_external_message should reach the external worker");
+
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == child_thread_id
+            && matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.author == AgentPath::root()
+                        && communication.recipient.as_str() == "/root/external_worker"
+                        && communication.encrypted_content.is_none()
+                        && communication.content.ends_with("Payload:\ncheck the next file")
+                        && !communication.trigger_turn
+            )
+    }));
+}
+
+#[test_case::test_case("all"; "explicit_full_history")]
+#[test_case::test_case("1"; "legacy_turn_count")]
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_allows_full_history_across_external_providers(
+    fork_turns: &str,
+) {
+    let (mut session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    install_qwen_provider_with_catalog(&mut turn).await;
+
+    let deepseek_provider = turn.config.model_providers["deepseek"].clone();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.model_provider_id = "deepseek".to_string();
+    config.model_provider = deepseek_provider.clone();
+    config.model = Some("deepseek-flash".to_string());
+    turn.provider = create_model_provider(deepseek_provider, turn.auth_manager.clone());
+    set_turn_config(&mut turn, config);
+
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    set_agent_control(&mut session, manager.agent_control());
+    session.thread_id = root.thread_id;
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "continue from this external-provider context",
+                "task_name": "qwen_branch",
+                "model": "qwen-flash",
+                "reasoning_effort": "high",
+                "fork_turns": fork_turns
+            })),
+        ))
+        .await
+        .expect("external providers should be able to fork history across providers");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn result should be json");
+    assert_eq!(result["task_name"], "/root/qwen_branch");
+
+    let agent_id = manager
+        .captured_ops()
+        .into_iter()
+        .find_map(|(thread_id, op)| match op {
+            Op::InterAgentCommunication { communication, .. }
+                if communication.recipient.as_str() == "/root/qwen_branch" =>
+            {
+                assert!(communication.encrypted_content.is_none());
+                Some(thread_id)
+            }
+            _ => None,
+        })
+        .expect("spawned external agent should receive a plaintext task");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "qwen-flash");
+    assert_eq!(snapshot.model_provider_id, "qwen");
+    assert_eq!(snapshot.forked_from_thread_id, Some(root.thread_id));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_rejects_history_fork_for_ephemeral_parent() {
+    let (session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    install_qwen_provider_with_catalog(&mut turn).await;
+
+    let deepseek_provider = turn.config.model_providers["deepseek"].clone();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.ephemeral = true;
+    config.model_provider_id = "deepseek".to_string();
+    config.model_provider = deepseek_provider.clone();
+    config.model = Some("deepseek-flash".to_string());
+    turn.provider = create_model_provider(deepseek_provider, turn.auth_manager.clone());
+    set_turn_config(&mut turn, config);
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "continue from this external-provider context",
+                "task_name": "qwen_branch",
+                "model": "qwen-flash",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .err()
+        .expect("ephemeral parent history should not be forked");
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Forked subagents require persisted parent history; use `fork_turns=\"none\"` or run without `--ephemeral`."
+                .to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_rejects_openai_history_across_providers() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    set_agent_control(&mut session, manager.agent_control());
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "deepseek_branch",
+                "model": "deepseek-flash",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .err()
+        .expect("OpenAI history should not cross providers");
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "OpenAI-backed agents require `fork_turns` to be `none` when spawning across providers because encrypted history cannot be forwarded; put the needed context in `message`."
+                .to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_external_spawn_uses_explicit_model_route() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    install_deepseek_provider_with_catalog(&mut turn).await;
+    install_external_model_route(&turn, "fast-code", "deepseek-flash").await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    set_agent_control(&mut session, manager.agent_control());
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "fast_code",
+                "model": "fast-code",
+                "reasoning_effort": "high",
+                "fork_turns": "none"
+            })),
+        ))
+        .await
+        .expect("explicit model route should select its provider and API model");
+
+    let agent_id = manager
+        .captured_ops()
+        .into_iter()
+        .find_map(|(thread_id, op)| match op {
+            Op::InterAgentCommunication { communication, .. }
+                if communication.recipient.as_str() == "/root/fast_code" =>
+            {
+                Some(thread_id)
+            }
+            _ => None,
+        })
+        .expect("spawned external agent should receive a task");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned external agent should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "deepseek-flash");
+    assert_eq!(snapshot.model_provider_id, "deepseek");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
 }
 
 #[tokio::test]
@@ -2493,9 +3062,16 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
         nickname: Option<String>,
     }
 
+    // Exercise the real spawn lifecycle against a local endpoint only.
+    let server = wiremock::MockServer::start().await;
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager();
     let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(server.uri());
+    turn.provider = create_model_provider(config.model_provider.clone(), None);
+    let manager = ThreadManager::with_models_provider_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     config.agent_max_depth = 1;
     config
         .features
@@ -2537,6 +3113,15 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
     assert_eq!(result.task_name, "/root/parent/child");
     assert_eq!(result.nickname, None);
     assert_eq!(success, Some(true));
+    for thread_id in manager.list_thread_ids().await {
+        manager
+            .get_thread(thread_id)
+            .await
+            .expect("spawned thread should remain available")
+            .shutdown_and_wait()
+            .await
+            .expect("shut down test thread");
+    }
 }
 
 #[tokio::test]
@@ -3161,6 +3746,8 @@ async fn multi_agent_v2_wait_agent_uses_configured_default_timeout() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
+    // Match the minimum-timeout test: compare Tokio deadlines without host scheduling delays.
+    tokio::time::pause();
     let early = timeout(
         Duration::from_millis(/*millis*/ 20),
         WaitAgentHandlerV2::default().handle(invocation(
@@ -3176,6 +3763,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_default_timeout() {
         "wait_agent should not return before the configured default timeout"
     );
 
+    let started_at = tokio::time::Instant::now();
     let output = timeout(
         Duration::from_secs(/*secs*/ 1),
         WaitAgentHandlerV2::default().handle(invocation(
@@ -3188,6 +3776,13 @@ async fn multi_agent_v2_wait_agent_uses_configured_default_timeout() {
     .await
     .expect("configured default should be shorter than the test timeout")
     .expect("wait_agent should succeed");
+    let elapsed = started_at.elapsed();
+    tokio::time::resume();
+    assert!(
+        elapsed >= Duration::from_millis(/*millis*/ 50)
+            && elapsed <= Duration::from_millis(/*millis*/ 51),
+        "wait_agent should time out at the configured default: {elapsed:?}"
+    );
     let (content, success) = expect_text_output(output);
     let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
         serde_json::from_str(&content).expect("wait_agent result should be json");

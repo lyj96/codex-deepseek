@@ -262,6 +262,13 @@ cargo_linker_var="CARGO_TARGET_${TARGET^^}_LINKER"
 cargo_linker_var="${cargo_linker_var//-/_}"
 echo "${cargo_linker_var}=${musl_linker}" >> "$GITHUB_ENV"
 
+if [[ "${TARGET}" == "x86_64-unknown-linux-musl" ]]; then
+  # The host musl-gcc can produce a PIE with an interpreter while Rust supplies
+  # its self-contained static-PIE startup objects. That binary can segfault
+  # before main. Select a non-PIE static executable for the shipped target.
+  echo "RUSTFLAGS=${RUSTFLAGS:+${RUSTFLAGS} }-C relocation-model=static -C link-arg=-static" >> "$GITHUB_ENV"
+fi
+
 echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
 echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
 echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"

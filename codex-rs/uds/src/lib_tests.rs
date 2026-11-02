@@ -28,6 +28,7 @@ async fn private_directory_rejects_junctions() {
     let junction = temp.path().join("junction");
     std::fs::create_dir(&target).expect("target");
     let output = std::process::Command::new("powershell.exe")
+        .env_remove("PSModulePath")
         .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:CODEX_TEST_LINK -Target $env:CODEX_TEST_TARGET | Out-Null"])
         .env("CODEX_TEST_LINK", &junction)
         .env("CODEX_TEST_TARGET", &target)
@@ -73,6 +74,7 @@ async fn socket_validation_rejects_broad_acl_without_repairing_it() {
     prepare_private_socket_directory(&directory).await.unwrap();
     let inspect = |script: &str| {
         let output = std::process::Command::new("powershell.exe")
+            .env_remove("PSModulePath")
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .env("CODEX_TEST_DIRECTORY", &directory)
             .output()
@@ -87,11 +89,13 @@ async fn socket_validation_rejects_broad_acl_without_repairing_it() {
     let before = inspect(
         r#"
 $ErrorActionPreference = 'Stop'
-$acl = Get-Acl -LiteralPath $env:CODEX_TEST_DIRECTORY
+# The fixture changes only this freshly created directory's DACL. Loading and
+# persisting unrelated audit sections would require SeSecurityPrivilege.
+$acl = [System.Security.AccessControl.DirectorySecurity]::new($env:CODEX_TEST_DIRECTORY, [System.Security.AccessControl.AccessControlSections]::Access)
 $everyone = [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0')
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($everyone, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
 $acl.AddAccessRule($rule)
-Set-Acl -LiteralPath $env:CODEX_TEST_DIRECTORY -AclObject $acl
+[System.IO.Directory]::SetAccessControl($env:CODEX_TEST_DIRECTORY, $acl)
 (Get-Acl -LiteralPath $env:CODEX_TEST_DIRECTORY).Sddl
 "#,
     );
@@ -147,6 +151,7 @@ async fn private_directory_acl_is_user_only_and_inherited_by_files() {
         .await
         .expect("private socket");
     let output = std::process::Command::new("powershell.exe")
+        .env_remove("PSModulePath")
         .args(["-NoProfile", "-NonInteractive", "-Command", r#"
 $ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -292,6 +297,7 @@ async fn implicit_peer_validation_rejects_elevated_listener() {
     let _server = listener.accept().await.unwrap();
     // PowerShell inherits our token and supplies an independent elevation oracle.
     let output = std::process::Command::new("powershell.exe")
+        .env_remove("PSModulePath")
         .args(["-NoProfile", "-NonInteractive", "-Command", "([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)"])
         .output().unwrap();
     assert!(output.status.success());

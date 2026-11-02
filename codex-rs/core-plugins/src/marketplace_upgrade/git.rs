@@ -185,6 +185,8 @@ fn run_git_command_with_timeout(
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
+    codex_git_utils::ensure_safe_repository_discovery(command)
+        .map_err(|err| format!("refused unsafe {context}: {err}"))?;
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

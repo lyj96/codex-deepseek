@@ -3,6 +3,7 @@ use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
 use crate::agent::child_config::SpawnConfigVersion;
+use crate::agent::child_config::SpawnModelRoute;
 use crate::agent::child_config::prepare_agent_spawn_config;
 use crate::agent::control::render_input_preview;
 use crate::agent::exceeds_thread_spawn_depth_limit;
@@ -104,6 +105,7 @@ async fn handle_spawn_agent(
             role_name,
             model: args.model.as_deref(),
             reasoning_effort: args.reasoning_effort.clone(),
+            model_route: SpawnModelRoute::SessionCatalog,
         },
     )
     .await

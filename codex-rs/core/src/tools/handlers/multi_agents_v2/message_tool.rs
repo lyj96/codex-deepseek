@@ -58,6 +58,10 @@ pub(super) async fn handle_message_string_tool(
     analytics.set_receiver(receiver_thread_id);
     let resume_config =
         build_agent_resume_config(&turn).map_err(FunctionCallError::RespondToModel)?;
+    // The controller owns recipient loading and can enforce the encryption
+    // boundary against the recipient's effective provider before delivery.
+    let allow_openai_encrypted_content =
+        turn.config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID;
     let receipt = session
         .services
         .agent_control
@@ -66,7 +70,7 @@ pub(super) async fn handle_message_string_tool(
             target: AgentTarget::Id(receiver_thread_id),
             resume_config,
             input: AgentInput::Message {
-                message: agent_message_from_tool(message, &source),
+                message: agent_message_from_tool(message, &source, allow_openai_encrypted_content),
                 mode,
             },
             start_options: TurnStartOptions {

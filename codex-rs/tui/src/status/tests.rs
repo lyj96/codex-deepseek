@@ -186,9 +186,13 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
+    // Bazel snapshots use 0.0.0, while Cargo builds embed the package version.
+    let current_version = format!("(v{})", env!("CARGO_PKG_VERSION"));
+    let snapshot_version = "(v0.0.0)";
     lines
         .into_iter()
         .map(|line| {
+            let line = line.replace(&current_version, snapshot_version);
             if let Some((prefix, value)) = line.split_once("Directory:") {
                 let padding = &value[..value.len() - value.trim_start().len()];
                 format!("{prefix}Directory:{padding}[[workspace]]")

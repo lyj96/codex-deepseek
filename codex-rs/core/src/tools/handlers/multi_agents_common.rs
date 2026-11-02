@@ -18,6 +18,9 @@ use codex_protocol::user_input::UserInput;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
+pub(crate) use crate::agent::child_config::MAX_SPAWN_AGENT_MODEL_OVERRIDES;
+pub(crate) const MAX_EXTERNAL_SPAWN_AGENT_MODEL_OVERRIDES: usize = 64;
+
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;

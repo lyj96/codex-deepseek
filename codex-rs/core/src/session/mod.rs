@@ -18,6 +18,7 @@ use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentTurnOutcome;
 use crate::agent::control::AgentControlInit;
 use crate::agent::status::is_final;
+use crate::agent_communication::model_input_item_for_provider;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::compact;
@@ -4265,7 +4266,8 @@ impl Session {
         {
             turn_context.turn_timing_state.invalidate_critical_path();
         }
-        let mut response_item = communication.to_model_input_item();
+        let mut response_item =
+            model_input_item_for_provider(&communication, &turn_context.config.model_provider_id);
         if let ResponseItem::AgentMessage {
             content,
             internal_chat_message_metadata_passthrough,

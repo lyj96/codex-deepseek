@@ -13,6 +13,7 @@ use crate::agent::api::DeliveryReceipt;
 use crate::agent::api::SendRequest;
 use crate::agent::api::SpawnRequest;
 use crate::agent::types::AgentExecutionGuard;
+use crate::agent::types::AgentMessage;
 use crate::agent::types::LiveAgent;
 use crate::agent::types::MessageDeliveryMode;
 use crate::agent_communication::AgentCommunicationContext;
@@ -29,6 +30,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::ThreadTraceContext;
+use codex_thread_store::ReadThreadParams;
 use futures::future::BoxFuture;
 use std::collections::HashSet;
 
@@ -73,6 +75,14 @@ impl AgentControl for LocalAgentControl {
                     if mode != MessageDeliveryMode::TriggerTurn {
                         return Err(CodexErr::InvalidRequest(
                             "spawn input must start the child turn".to_string(),
+                        ));
+                    }
+                    if matches!(message, AgentMessage::Encrypted(_))
+                        && config.model_provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID
+                    {
+                        return Err(CodexErr::UnsupportedOperation(
+                            "OpenAI encrypted agent messages cannot be sent to an external provider; use spawn_external_agent with plaintext"
+                                .to_string(),
                         ));
                     }
                     let recipient = source.get_agent_path().ok_or_else(|| {
@@ -151,6 +161,30 @@ impl AgentControl for LocalAgentControl {
                     } else {
                         None
                     };
+                    if matches!(message, AgentMessage::Encrypted(_)) {
+                        // Reading durable provider metadata must not reload an evicted child
+                        // just to queue mail. Fail closed if the recipient cannot be inspected.
+                        let provider_id = match self.inspect_agent(target).await? {
+                            AgentInfo::Loaded { config, .. } => config.model_provider_id,
+                            AgentInfo::Unloaded(_) => {
+                                self.runtime
+                                    .upgrade()?
+                                    .read_stored_thread(ReadThreadParams {
+                                        thread_id: target,
+                                        include_archived: true,
+                                        include_history: false,
+                                    })
+                                    .await?
+                                    .model_provider
+                            }
+                        };
+                        if provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID {
+                            return Err(CodexErr::UnsupportedOperation(
+                                "OpenAI encrypted agent messages cannot be sent to an external provider; use send_external_message or followup_external_task with plaintext"
+                                    .to_string(),
+                            ));
+                        }
+                    }
                     let communication = message.into_communication(author, receiver_path, mode);
                     let kind = match mode {
                         MessageDeliveryMode::QueueOnly => {

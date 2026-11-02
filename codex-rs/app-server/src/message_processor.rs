@@ -806,6 +806,7 @@ impl MessageProcessor {
         mut snapshot: codex_app_server_transport::daemon_recovery::RecoverySnapshot,
     ) {
         for thread_id in snapshot.loaded {
+            let saved_config = snapshot.configs.remove(&thread_id).unwrap_or_default();
             let Ok(_permit) = self.turn_admission.admit() else {
                 break;
             };
@@ -816,11 +817,13 @@ impl MessageProcessor {
                     codex_app_server_protocol::ThreadResumeParams {
                         thread_id: thread_id.clone(),
                         exclude_turns: true,
+                        config: (!saved_config.overrides.is_empty())
+                            .then_some(saved_config.overrides),
                         ..Default::default()
                     },
                     /*app_server_client_name*/ None,
                     /*app_server_client_version*/ None,
-                    ClientMcpExtensions::default(),
+                    ClientMcpExtensions::new(saved_config.extensions),
                 )
                 .await
             {

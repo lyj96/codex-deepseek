@@ -6357,8 +6357,12 @@ async fn thread_resume_surfaces_cloud_config_bundle_load_errors() -> Result<()> 
         /*git_info*/ None,
     )?;
     let refresh_token_url = format!("{}/oauth/token", server.uri());
+    // Startup falls back to defaults after the managed configuration error. Keep
+    // the mock endpoint in CLI overrides so subsequent loads stay local too.
+    let chatgpt_base_url_override = format!("chatgpt_base_url = {chatgpt_base_url:?}");
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .with_args(&["-c", &chatgpt_base_url_override])
         .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
             (

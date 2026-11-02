@@ -19,6 +19,7 @@ use codex_rmcp_client::EnterpriseOAuthCredentialGuard;
 
 mod bedrock_gov_cloud;
 mod bedrock_setup;
+mod desktop_identity;
 mod enterprise_login;
 mod gateway_oauth;
 mod gcp_setup;
@@ -1103,11 +1104,11 @@ impl AccountRequestProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        // Determine whether auth is required based on the active model provider.
-        // If a custom provider is configured with `requires_openai_auth == false`,
-        // then no auth step is required; otherwise, default to requiring auth.
+        // Desktop account identity must survive selecting a managed external model.
+        // External inference still uses the configured provider's own credentials.
         let config = self.load_latest_config().await;
-        let requires_openai_auth = config.model_provider.requires_openai_auth;
+        let requires_openai_auth =
+            desktop_identity::account_provider(&config, &self.auth_manager).requires_openai_auth;
 
         let response = if !requires_openai_auth {
             GetAuthStatusResponse {

@@ -2,6 +2,8 @@ use super::thread_input::ensure_direct_input_allowed;
 use super::*;
 use codex_app_server_protocol::ImageReference as V2ImageReference;
 use codex_app_server_protocol::ThreadItem;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -415,6 +417,66 @@ impl TurnRequestProcessor {
         collaboration_mode
     }
 
+    async fn route_thread_model(
+        &self,
+        thread_config: &Config,
+        requested_model: String,
+    ) -> Result<String, JSONRPCErrorError> {
+        if let Some(external) = thread_config.configured_external_model(&requested_model) {
+            if external.provider_id != thread_config.model_provider_id {
+                return Err(invalid_request(format!(
+                    "switching from provider `{}` to `{}` requires starting a new thread",
+                    thread_config.model_provider_id, external.provider_id
+                )));
+            }
+            return Ok(external.api_model);
+        }
+
+        let requested_provider = thread_config.provider_id_for_model(&requested_model);
+        // Unknown raw model names fall back to the built-in provider in provider lookup. Keep
+        // accepting those names on the thread's existing provider so custom API model IDs remain
+        // usable. A known built-in model or a provider-prefixed external model is an actual
+        // in-place provider switch and must be rejected.
+        let requested_provider_is_builtin = requested_provider == OPENAI_PROVIDER_ID;
+        let current_provider_is_managed_external = thread_config
+            .configured_external_models()
+            .iter()
+            .any(|model| model.provider_id == thread_config.model_provider_id);
+        let selects_known_builtin_model = if requested_provider_is_builtin
+            && current_provider_is_managed_external
+        {
+            let bundled_model =
+                codex_models_manager::bundled_models_response().is_ok_and(|catalog| {
+                    catalog
+                        .models
+                        .iter()
+                        .any(|model| model.slug == requested_model)
+                });
+            bundled_model
+                || self
+                    .thread_manager
+                    .list_models(
+                        RefreshStrategy::Offline,
+                        thread_config.http_client_factory(),
+                    )
+                    .await
+                    .iter()
+                    .any(|preset| preset.id == requested_model || preset.model == requested_model)
+        } else {
+            false
+        };
+        if requested_provider != thread_config.model_provider_id
+            && (requested_model.starts_with(&requested_provider) || selects_known_builtin_model)
+        {
+            return Err(invalid_request(format!(
+                "switching from provider `{}` to `{requested_provider}` requires starting a new thread",
+                thread_config.model_provider_id
+            )));
+        }
+
+        Ok(requested_model)
+    }
+
     fn review_request_from_target(
         target: ApiReviewTarget,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
@@ -791,11 +853,11 @@ impl TurnRequestProcessor {
             approvals_reviewer,
             sandbox_policy,
             permissions,
-            model,
+            mut model,
             service_tier,
             effort,
             summary,
-            collaboration_mode,
+            mut collaboration_mode,
             personality,
         } = params;
 
@@ -805,6 +867,23 @@ impl TurnRequestProcessor {
             ));
         }
 
+        if model.is_some() || collaboration_mode.is_some() {
+            let thread_config = thread.config().await;
+            if let Some(requested_model) = model.take() {
+                model = Some(
+                    self.route_thread_model(thread_config.as_ref(), requested_model)
+                        .await?,
+                );
+            }
+            if let Some(mode) = collaboration_mode.as_mut() {
+                mode.settings.model = self
+                    .route_thread_model(
+                        thread_config.as_ref(),
+                        std::mem::take(&mut mode.settings.model),
+                    )
+                    .await?;
+            }
+        }
         let collaboration_mode =
             collaboration_mode.map(|mode| self.normalize_collaboration_mode(mode));
         let has_environment_override = environment_requests.is_some();

@@ -21,6 +21,7 @@ use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -52,7 +53,10 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::WaitForEnvironmentHandler;
+use crate::tools::handlers::multi_agents_spec::FOLLOWUP_EXTERNAL_TASK_TOOL_NAME;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
+use crate::tools::handlers::multi_agents_spec::SEND_EXTERNAL_MESSAGE_TOOL_NAME;
+use crate::tools::handlers::multi_agents_spec::SPAWN_EXTERNAL_AGENT_TOOL_NAME;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::router::ToolRouter;
@@ -2892,6 +2896,161 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
             Some(true)
         );
     }
+}
+
+#[test_case::test_case(false, false, false; "inline_catalog_direct_messages")]
+#[test_case::test_case(true, false, false; "context_catalog_direct_messages")]
+#[test_case::test_case(false, true, false; "inline_catalog_channels_only")]
+#[test_case::test_case(true, true, false; "context_catalog_channels_only")]
+#[test_case::test_case(false, false, true; "inline_catalog_native_tools_hidden")]
+#[test_case::test_case(true, false, true; "context_catalog_native_tools_hidden")]
+#[test_case::test_case(false, true, true; "inline_catalog_all_messages_hidden")]
+#[test_case::test_case(true, true, true; "context_catalog_all_messages_hidden")]
+#[tokio::test]
+async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
+    model_catalog_in_context: bool,
+    disable_direct_message: bool,
+    disable_native_tools: bool,
+) {
+    // Keep a board fixture available while testing channels-only schemas.
+    let inputs = ToolPlanInputs {
+        extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
+            namespace: MULTI_AGENT_V2_NAMESPACE,
+            tool_name: "post",
+        })],
+        ..ToolPlanInputs::default()
+    };
+    let plan = probe_with(
+        |turn| {
+            set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+            set_feature(
+                turn,
+                Feature::ModelCatalogInContext,
+                model_catalog_in_context,
+            );
+            let mut external_model = turn.model_info().as_ref().clone();
+            external_model.slug = "deepseek-test".to_string();
+            external_model.display_name = "DeepSeek Test".to_string();
+            external_model.visibility = ModelVisibility::List;
+            let catalog_dir = turn.config.codex_home.join("model-catalogs");
+            std::fs::create_dir_all(&catalog_dir).expect("create external model catalog directory");
+            std::fs::write(
+                catalog_dir.join("deepseek.json"),
+                serde_json::to_vec(&codex_protocol::openai_models::ModelsResponse {
+                    models: vec![external_model],
+                })
+                .expect("serialize external model catalog"),
+            )
+            .expect("write external model catalog");
+            update_config(turn, |config| {
+                config.multi_agent_v2.disable_direct_message = disable_direct_message;
+                config.multi_agent_v2.disable_native_tools = disable_native_tools;
+                config
+                    .model_providers
+                    .insert("deepseek".to_string(), config.model_provider.clone());
+            });
+        },
+        inputs,
+    )
+    .await;
+
+    for tool_name in [
+        SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+        SEND_EXTERNAL_MESSAGE_TOOL_NAME,
+        FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
+    ] {
+        if disable_native_tools
+            || (disable_direct_message && tool_name != SPAWN_EXTERNAL_AGENT_TOOL_NAME)
+        {
+            plan.assert_visible_lacks(&[tool_name]);
+            plan.assert_registered_lacks(&[tool_name]);
+            continue;
+        }
+        let ToolSpec::Function(tool) = plan.visible_spec(tool_name) else {
+            panic!("expected {tool_name} function tool");
+        };
+        let properties = tool
+            .parameters
+            .properties
+            .as_ref()
+            .expect("tool should use object params");
+        assert_eq!(
+            properties
+                .get("message")
+                .and_then(|schema| schema.encrypted),
+            None
+        );
+        assert!(tool.description.contains("external model provider"));
+        assert!(tool.description.contains("redacted from tool logs"));
+        if tool_name == SPAWN_EXTERNAL_AGENT_TOOL_NAME {
+            assert!(
+                tool.description.contains("`deepseek-test`"),
+                "configured external model missing from tool description: {}",
+                tool.description
+            );
+            assert!(!tool.description.contains("latest <model_catalog> listing"));
+            assert!(
+                tool.description
+                    .contains("across configured external providers")
+            );
+            let fork_turns_description = properties
+                .get("fork_turns")
+                .and_then(|schema| schema.description.as_deref())
+                .expect("external spawn should describe fork_turns behavior");
+            assert!(
+                fork_turns_description
+                    .contains("even when the target uses another configured external provider")
+            );
+            assert!(fork_turns_description.contains("encrypted OpenAI history cannot cross"));
+        }
+    }
+
+    if disable_native_tools {
+        for tool_name in [
+            "spawn_agent",
+            "send_message",
+            "followup_task",
+            "wait_agent",
+            "interrupt_agent",
+            "list_agents",
+        ] {
+            let qualified_name = format!("{MULTI_AGENT_V2_NAMESPACE}.{tool_name}");
+            plan.assert_registered_lacks(&[&qualified_name]);
+        }
+        // This flag describes the model-visible management tools, not whether the V2 backend lives.
+        // Upstream intentionally returns no required management tool names when built-ins are hidden.
+        assert!(!plan.can_manage_children);
+        return;
+    }
+
+    let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {
+        panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
+    };
+    for tool_name in ["send_message", "followup_task"] {
+        assert_eq!(
+            plan.namespace_function_names(MULTI_AGENT_V2_NAMESPACE)
+                .iter()
+                .any(|name| name == tool_name),
+            !disable_direct_message
+        );
+    }
+    let official_spawn = namespace
+        .tools
+        .iter()
+        .find_map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == "spawn_agent" => Some(tool),
+            _ => None,
+        })
+        .expect("official spawn_agent should remain available");
+    assert_eq!(
+        official_spawn
+            .parameters
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.get("message"))
+            .and_then(|schema| schema.encrypted),
+        Some(true)
+    );
 }
 
 #[tokio::test]

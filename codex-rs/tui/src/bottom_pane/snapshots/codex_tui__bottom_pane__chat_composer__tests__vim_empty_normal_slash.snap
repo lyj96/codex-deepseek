@@ -4,9 +4,9 @@ expression: terminal.backend()
 ---
 "› /model          choose what model and reasoning effort to "
 "                  use                                       "
+"  /provider       filter models by provider                 "
 "  /presets        run or save reusable prompts and slash    "
 "                  commands                                  "
-"  /ide            include current selection, open files, and"
 "                                                            "
 "› /                                                         "
 "                                                            "

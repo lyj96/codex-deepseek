@@ -3,6 +3,31 @@ use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
 
+#[test]
+fn yaml_replacement_preserves_command_frontmatter_semantics() {
+    for (frontmatter, expected) in [
+        ("description: true", Some("true")),
+        ("description: tRuE", Some("tRuE")),
+        ("description: 042", Some("042")),
+        ("description: 0x2A", Some("42")),
+        ("description: -0.0", Some("-0.0")),
+        ("description: .nan", Some(".nan")),
+        ("description: 1e999", Some("1e999")),
+        ("description: !custom text", None),
+        ("description: !!binary dGV4dA==", Some("dGV4dA==")),
+        ("? [a, b]\n: ignored\ndescription: text", Some("text")),
+        ("description: first\ndescription: second", None),
+        ("defaults: &d {description: merged}\n<<: *d", None),
+        ("description: &d text\nother: *d", Some("text")),
+    ] {
+        assert_eq!(
+            parse_command_description(frontmatter),
+            expected.map(str::to_string),
+            "{frontmatter}"
+        );
+    }
+}
+
 const TEST_REWRITE_PROFILE: RewriteProfile = RewriteProfile::new(
     "CLAUDE.md",
     &[

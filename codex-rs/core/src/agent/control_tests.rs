@@ -1,5 +1,6 @@
 use super::*;
 use crate::CodexThread;
+use crate::PendingAgentMessage;
 use crate::StateDbHandle;
 use crate::ThreadManager;
 use crate::agent::agent_status_from_event;
@@ -10,6 +11,7 @@ use crate::agent::api::AgentTarget;
 use crate::agent::api::SendRequest;
 use crate::agent::api::SpawnRequest;
 use crate::agent::next_thread_spawn_depth;
+use crate::agent::registry::EvictedEnvironments;
 use crate::agent::types::AgentMessage;
 use crate::agent::types::LiveAgent;
 use crate::agent::types::MessageDeliveryMode;
@@ -1254,6 +1256,126 @@ async fn spawn_v2_reload_test_child(
         .expect("spawn_agent should succeed")
 }
 
+#[derive(Clone, Copy)]
+enum EncryptedMessageRecipient {
+    LoadedExternal,
+    EvictedExternal,
+    EvictedOpenAi,
+}
+
+#[test_case::test_case(EncryptedMessageRecipient::LoadedExternal; "loaded_external")]
+#[test_case::test_case(EncryptedMessageRecipient::EvictedExternal; "evicted_external")]
+#[test_case::test_case(EncryptedMessageRecipient::EvictedOpenAi; "evicted_openai")]
+#[tokio::test]
+async fn encrypted_agent_message_cannot_cross_to_external_provider(
+    recipient: EncryptedMessageRecipient,
+) {
+    let (home, mut config) = test_config().await;
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("enable multi-agent v2");
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (root_id, root) = harness.start_thread().await;
+    let mut child_config = harness.config.clone();
+    if !matches!(recipient, EncryptedMessageRecipient::EvictedOpenAi) {
+        child_config.model_provider_id = "ollama".to_string();
+        child_config.model_provider = child_config
+            .model_providers
+            .get("ollama")
+            .cloned()
+            .expect("ollama provider should be configured");
+    }
+    let child = spawn_v2_reload_test_child(&harness.control, child_config, &root, "external").await;
+    if !matches!(recipient, EncryptedMessageRecipient::LoadedExternal) {
+        let thread = harness
+            .manager
+            .get_thread(child.thread_id)
+            .await
+            .expect("child should be loaded");
+        persist_thread_for_tree_resume(&thread, "child persisted before eviction").await;
+        let environments = EvictedEnvironments {
+            selections: thread.environment_selections().await,
+            bindings: thread
+                .session
+                .services
+                .turn_environments
+                .configured_snapshot_now(),
+        };
+        thread.shutdown_and_wait().await.expect("shut down child");
+        harness
+            .control
+            .runtime
+            .registry
+            .save_evicted_environments(child.thread_id, environments);
+        assert!(
+            harness
+                .manager
+                .remove_thread(&child.thread_id)
+                .await
+                .is_some()
+        );
+        assert_thread_not_loaded(&harness.manager, child.thread_id).await;
+    }
+    let turn = root.session.new_default_turn().await;
+    let make_request = |message| crate::SendRequest {
+        caller: root_id,
+        target: crate::AgentTarget::Id(child.thread_id),
+        resume_config: crate::agent::child_config::build_agent_resume_config(&turn)
+            .expect("capture resume config"),
+        input: AgentInput::Message {
+            message,
+            mode: MessageDeliveryMode::QueueOnly,
+        },
+        start_options: TurnStartOptions::default(),
+    };
+    let result = harness
+        .control
+        .send(make_request(AgentMessage::Encrypted(
+            "opaque ciphertext".to_string(),
+        )))
+        .await;
+    match recipient {
+        EncryptedMessageRecipient::LoadedExternal | EncryptedMessageRecipient::EvictedExternal => {
+            let err = result
+                .err()
+                .expect("encrypted content must not reach an external provider");
+            assert!(
+                err.to_string()
+                    .contains("cannot be sent to an external provider"),
+                "{err}"
+            );
+            assert!(harness.control.take_mailbox(child.thread_id).is_empty());
+        }
+        EncryptedMessageRecipient::EvictedOpenAi => {
+            result.expect("encrypted OpenAI mail should be queued without reloading");
+            assert_eq!(
+                harness.control.take_mailbox(child.thread_id),
+                vec![PendingAgentMessage::from(
+                    InterAgentCommunication::new_encrypted(
+                        AgentPath::root(),
+                        child.metadata.agent_path.clone().expect("child path"),
+                        Vec::new(),
+                        "opaque ciphertext".to_string(),
+                        /*trigger_turn*/ false,
+                    )
+                )],
+            );
+        }
+    }
+    harness
+        .control
+        .send(make_request(AgentMessage::Plaintext(
+            "safe message".to_string(),
+        )))
+        .await
+        .expect("plaintext delivery should remain available");
+    if !matches!(recipient, EncryptedMessageRecipient::LoadedExternal) {
+        assert_thread_not_loaded(&harness.manager, child.thread_id).await;
+        assert_eq!(harness.control.take_mailbox(child.thread_id).len(), 1);
+    }
+}
+
 async fn check_v2_agent_reload(route: V2ReloadRoute) {
     let (home, mut config) = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
@@ -2294,7 +2416,14 @@ async fn spawn_agent_disabled_plugins_follow_parent_unless_overridden(
     disabled_plugin_ids: Option<Vec<String>>,
     expected: Vec<String>,
 ) {
-    let harness = AgentControlHarness::new().await;
+    // These settings assertions must not depend on the public API or DNS.
+    let server = wiremock::MockServer::start().await;
+    let (home, config) = test_config_with_cli_overrides(vec![(
+        "openai_base_url".to_string(),
+        TomlValue::String(server.uri()),
+    )])
+    .await;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
     let parent = harness
         .manager
         .start_thread(StartThreadOptions {

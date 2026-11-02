@@ -168,8 +168,9 @@ async fn high_stdio_descriptors_use_compatible_fallback() -> anyhow::Result<()> 
         let descriptor = file.try_clone()?;
         let raw = descriptor.as_raw_fd();
         occupied.push(descriptor);
-        // Darwin's spawn file actions reject valid descriptors >= OPEN_MAX
-        // (10240), even when RLIMIT_NOFILE allows the descriptor to be opened.
+        // Native setup clones stdio into the lowest available descriptor. Keep
+        // every lower slot occupied so the real spawn action reaches Darwin's
+        // OPEN_MAX boundary, not merely a high caller-owned descriptor.
         if raw >= 10_240 {
             break;
         }

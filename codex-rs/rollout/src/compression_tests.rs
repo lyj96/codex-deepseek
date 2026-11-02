@@ -742,6 +742,7 @@ async fn worker_preserves_inherited_acl_through_append() -> anyhow::Result<()> {
 #[cfg(unix)]
 #[tokio::test]
 async fn worker_preserves_alternate_group_through_materialization() -> anyhow::Result<()> {
+    use anyhow::Context as _;
     use std::os::unix::fs::MetadataExt;
     use std::process::Command;
 
@@ -749,8 +750,8 @@ async fn worker_preserves_alternate_group_through_materialization() -> anyhow::R
     let uuid = Uuid::from_u128(62);
     let thread_id = ThreadId::from_string(&uuid.to_string())?;
     let path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
-    write_rollout(&path, thread_id, "different group")?;
-    set_old_mtime(&path)?;
+    write_rollout(&path, thread_id, "different group").context("write alternate-group fixture")?;
+    set_old_mtime(&path).context("age alternate-group fixture")?;
     let original_group = fs::metadata(&path)?.gid();
     let groups = Command::new("id").arg("-G").output()?;
     assert!(groups.status.success());
@@ -764,13 +765,18 @@ async fn worker_preserves_alternate_group_through_materialization() -> anyhow::R
         eprintln!("skipping ownership regression: no alternate supplementary group");
         return Ok(());
     };
-    std::os::unix::fs::chown(&path, /*uid*/ None, Some(group))?;
+    std::os::unix::fs::chown(&path, /*uid*/ None, Some(group))
+        .context("assign alternate supplementary group to fixture")?;
     assert_eq!(fs::metadata(&path)?.gid(), group);
 
-    worker::run(home.path().to_path_buf(), Startup).await?;
+    worker::run(home.path().to_path_buf(), Startup)
+        .await
+        .context("compress alternate-group rollout")?;
     assert!(!path.exists());
     assert_eq!(fs::metadata(compressed_rollout_path(&path))?.gid(), group);
-    materialize_rollout_for_append(&path, /*writer_lock*/ None).await?;
+    materialize_rollout_for_append(&path, /*writer_lock*/ None)
+        .await
+        .context("materialize alternate-group rollout")?;
     assert_eq!(fs::metadata(&path)?.gid(), group);
     Ok(())
 }
