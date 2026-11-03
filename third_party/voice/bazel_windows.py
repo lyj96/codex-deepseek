@@ -134,11 +134,15 @@ def main():
                     "BUILD_USER",
                     "STABLE_GIT_COMMIT",
                 )
-                status_lines = status_bytes.decode("utf-8", errors="replace").splitlines()
+                status_lines = status_bytes.decode(
+                    "utf-8", errors="replace"
+                ).splitlines()
                 key_counts = {}
                 for key in known_keys:
                     prefix = key + " "
-                    key_counts[key] = sum(line.startswith(prefix) for line in status_lines)
+                    key_counts[key] = sum(
+                        line.startswith(prefix) for line in status_lines
+                    )
                 print(
                     "Workspace status diagnostics: "
                     + json.dumps(
