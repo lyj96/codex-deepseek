@@ -6,6 +6,8 @@ on:
 jobs:
   cargo-deny:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ./codex-rs
@@ -32,6 +34,8 @@ jobs:
 
       - name: Scan and classify official-stable security risks
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           python3 -m unittest discover -s ../.github/scripts -p 'test_upstream_security.py'

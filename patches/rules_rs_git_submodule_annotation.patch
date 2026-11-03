@@ -1,0 +1,64 @@
+# Allow a Git crate to omit redundant submodules when its native inputs are
+# supplied by separate, fully pinned source repositories. Preserve the default
+# for other crates and reject inconsistent settings for a shared checkout.
+
+diff --git a/rs/extensions.bzl b/rs/extensions.bzl
+--- a/rs/extensions.bzl
++++ b/rs/extensions.bzl
+@@ -749,6 +749,7 @@
+                         "gen_binaries": {},
+                         "commit": commit,
+                         "hub_name": cfg.name,
++                        "git_init_submodules": annotation.git_init_submodules,
+                         "patch_args": [],
+                         "patch_tool": "",
+                         "patches": {},
+@@ -765,6 +766,9 @@
+                         repo_name,
+                     ))
+
++                if git_repo["git_init_submodules"] != annotation.git_init_submodules:
++                    fail("Git crates from %s use incompatible git_init_submodules settings" % source)
++
+                 strip_prefix = package.get("strip_prefix")
+                 if strip_prefix == None:
+                     strip_prefix = json.decode(facts[source + "_" + package["name"]])["strip_prefix"]
+@@ -795,6 +799,8 @@
+             build_files = git_repo["build_files"],
+             commit = git_repo["commit"],
+             hub_name = git_repo["hub_name"],
++            init_submodules = git_repo["git_init_submodules"],
++            recursive_init_submodules = git_repo["git_init_submodules"],
+             patch_args = git_repo["patch_args"],
+             patch_tool = git_repo["patch_tool"],
+             patches = git_repo["patches"].values(),
+@@ -995,6 +1001,10 @@
+         # "shallow_since": attr.string(
+         #     doc = "An optional timestamp used for crates originating from a git repository instead of a crate registry. This flag optimizes fetching the source code.",
+         # ),
++        "git_init_submodules": attr.bool(
++            doc = "Initialize Git submodules recursively. All crates sharing a Git checkout must agree.",
++            default = True,
++        ),
+         "strip_prefix": attr.string(),
+         "workspace_cargo_toml": attr.string(
+             doc = "For crates from git, the ruleset assumes the (workspace) Cargo.toml is in the repo root. This attribute overrides the assumption.",
+diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
+--- a/rs/private/annotations.bzl
++++ b/rs/private/annotations.bzl
+@@ -23,6 +23,7 @@
+         patch_args = [],
+         patch_tool = None,
+         patches = [],
++        git_init_submodules = True,
+         strip_prefix = None,
+         workspace_cargo_toml = "Cargo.toml"):
+     return struct(
+@@ -50,6 +51,7 @@
+         patch_args = patch_args,
+         patch_tool = patch_tool,
+         patches = patches,
++        git_init_submodules = git_init_submodules,
+         strip_prefix = strip_prefix,
+         workspace_cargo_toml = workspace_cargo_toml,
+     )

@@ -13,6 +13,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 #[cfg(unix)]
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cargo_bin::cargo_bin;
+use codex_utils_cargo_bin::copy_executable;
 use codex_utils_process::background_command;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -24,8 +25,18 @@ use tokio::io::BufReader;
 
 #[tokio::test]
 async fn standalone_initializes_reports_version_and_runs_helpers() -> anyhow::Result<()> {
-    let binary = cargo_bin("codex-exec-server")?;
+    let source_binary = cargo_bin("codex-exec-server")?;
     let directory = tempfile::tempdir()?;
+    // BuildInfo reads release versions from the shipped package metadata. A
+    // bare source executable intentionally reports 0.0.0 over the protocol.
+    let bin_dir = directory.path().join("bin");
+    std::fs::create_dir(&bin_dir)?;
+    let binary = bin_dir.join(source_binary.file_name().context("executor filename")?);
+    copy_executable(&source_binary, &binary)?;
+    std::fs::write(
+        directory.path().join("codex-package.json"),
+        serde_json::to_vec(&json!({"version": env!("CARGO_PKG_VERSION")}))?,
+    )?;
     let cwd = url::Url::from_directory_path(directory.path())
         .map_err(|()| anyhow::anyhow!("file URI"))?;
     let version = tokio::process::Command::from(background_command(&binary))

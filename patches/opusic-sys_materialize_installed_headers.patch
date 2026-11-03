@@ -1,0 +1,25 @@
+diff --git a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -236,6 +236,21 @@
+
+     let mut out_dir = cmake.build();
+
++    // Bazel output trees must not retain links to temporary action inputs.
++    // Materialize installed public headers from the same vendored sources.
++    let installed_headers = out_dir.join("include").join("opus");
++    for entry in std::fs::read_dir(&installed_headers).expect("installed Opus headers") {
++        let entry = entry.expect("installed Opus header entry");
++        let destination = entry.path();
++        let metadata = std::fs::symlink_metadata(&destination).expect("Opus header metadata");
++        if metadata.file_type().is_symlink() {
++            let source = path::Path::new(CURRENT_DIR).join("include").join(entry.file_name());
++            let contents = std::fs::read(&source).expect("vendored Opus header");
++            std::fs::remove_file(&destination).expect("remove installed Opus header link");
++            std::fs::write(&destination, contents).expect("materialize installed Opus header");
++        }
++    }
++
+     println!("cargo:rustc-link-lib=static=opus");
+
+     out_dir.push("lib");

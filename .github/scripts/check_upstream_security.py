@@ -13,10 +13,30 @@ import re
 import subprocess
 import sys
 import tomllib
-from urllib.request import urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+
+
+class NoCredentialRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Fail closed instead of forwarding the workflow token to a redirect.
+        return None
 
 
 def download(url):
+    parsed = urlsplit(url)
+    token = os.environ.get("GITHUB_TOKEN")
+    if parsed.scheme == "https" and parsed.netloc == "api.github.com" and token:
+        request = Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "codex-upstream-security",
+            },
+        )
+        with build_opener(NoCredentialRedirect()).open(request, timeout=60) as response:
+            return response.read()
     with urlopen(url, timeout=60) as response:
         return response.read()
 

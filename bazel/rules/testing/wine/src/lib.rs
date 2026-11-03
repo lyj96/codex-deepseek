@@ -223,13 +223,7 @@ impl WineProcesses {
         log_wine_lifecycle(format_args!(
             "async child wait finished; stopping wineserver"
         ));
-        let wineserver_result = async {
-            let mut command = TokioCommand::from(self.stop_wineserver_command());
-            let status = command.status().await.context("stop isolated wineserver")?;
-            anyhow::ensure!(status.success(), "wineserver exited with {status}");
-            Ok(())
-        }
-        .await;
+        let wineserver_result = self.stop_wineserver().await;
         log_wine_lifecycle(format_args!("async wineserver stop finished"));
 
         // Every cleanup action has been attempted, so an individual error
@@ -240,11 +234,36 @@ impl WineProcesses {
         wineserver_result
     }
 
-    fn stop_wineserver_command(&self) -> StdCommand {
+    async fn stop_wineserver(&self) -> Result<()> {
+        let mut first_error = None;
+        // Wine exits while parsing -k, so passing -k and -w together never
+        // performs the explicit wait. Reap the server before removing its
+        // prefix, including when the stop command reports an error.
+        for action in ["-k", "-w"] {
+            log_wine_lifecycle(format_args!("wineserver {action} starting"));
+            let result = async {
+                let mut command = TokioCommand::from(self.wineserver_command(action));
+                let status = command.status().await.context("stop isolated wineserver")?;
+                anyhow::ensure!(status.success(), "wineserver {action} exited with {status}");
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            log_wine_lifecycle(format_args!("wineserver {action} finished"));
+            if first_error.is_none() {
+                first_error = result.err();
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn wineserver_command(&self, action: &str) -> StdCommand {
         let mut command = StdCommand::new(&self.runtime.wineserver);
         configure_wine_environment(&mut command, &self.runtime, self.prefix.path());
         command
-            .args(["-k", "-w"])
+            .arg(action)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         command
@@ -281,13 +300,15 @@ impl WineProcesses {
         }
 
         log_panic_cleanup(format_args!("Wine panic cleanup stopping its wineserver"));
-        match self.stop_wineserver_command().status() {
-            Ok(status) => log_panic_cleanup(format_args!(
-                "Wine panic cleanup wineserver exited with {status}"
-            )),
-            Err(error) => log_panic_cleanup(format_args!(
-                "Wine panic cleanup could not stop its wineserver: {error}"
-            )),
+        for action in ["-k", "-w"] {
+            match self.wineserver_command(action).status() {
+                Ok(status) => log_panic_cleanup(format_args!(
+                    "Wine panic cleanup wineserver {action} exited with {status}"
+                )),
+                Err(error) => log_panic_cleanup(format_args!(
+                    "Wine panic cleanup could not run wineserver {action}: {error}"
+                )),
+            }
         }
         self.cleanup_complete = true;
         log_panic_cleanup(format_args!("Wine panic cleanup complete"));

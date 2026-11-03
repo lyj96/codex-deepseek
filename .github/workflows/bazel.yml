@@ -28,7 +28,7 @@ jobs:
           # macOS
           - os: macos-15
             target: aarch64-apple-darwin
-          - os: macos-15
+          - os: macos-15-intel
             target: x86_64-apple-darwin
 
           # Linux
@@ -85,6 +85,13 @@ jobs:
           releases="$(python3 .github/scripts/resolve_exec_server_releases.py)"
           echo "CODEX_COMPAT_RELEASES=$releases" >> "$GITHUB_ENV"
 
+      - name: Prepare hosted macOS descriptor-test resource ceiling
+        if: runner.os == 'macOS'
+        env:
+          CODEX_DESCRIPTOR_TEST_HOSTED: ${{ runner.environment }}
+        shell: bash
+        run: bash .github/scripts/macos-descriptor-test-limit.sh prepare
+
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
@@ -108,12 +115,36 @@ jobs:
             --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
+          # Run the ownership group first so a later full-build failure cannot
+          # prevent its assertions from running. Aggregate both exit statuses.
+          rollout_status=0
+          set +e
+          if [[ "$RUNNER_OS" == Linux && "$RUNNER_ENVIRONMENT" == github-hosted && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+            ./.github/scripts/run-bazel-ci.sh \
+              "${bazel_wrapper_args[@]}" -- "${bazel_test_args[@]}" -- \
+              //codex-rs/rollout:rollout-unit-tests
+            rollout_status=$?
+            bazel_targets+=(-//codex-rs/rollout:rollout-unit-tests)
+          fi
           ./.github/scripts/run-bazel-ci.sh \
             "${bazel_wrapper_args[@]}" \
             -- \
             "${bazel_test_args[@]}" \
             -- \
             "${bazel_targets[@]}"
+          full_status=$?
+          set -e
+          if (( rollout_status != 0 )); then
+            exit "$rollout_status"
+          fi
+          exit "$full_status"
+
+      - name: Restore hosted macOS descriptor-test resource ceiling
+        if: always() && runner.os == 'macOS' && env.CODEX_DESCRIPTOR_TEST_ORIGINAL_MAXFILES != ''
+        env:
+          CODEX_DESCRIPTOR_TEST_HOSTED: ${{ runner.environment }}
+        shell: bash
+        run: bash .github/scripts/macos-descriptor-test-limit.sh restore
 
       - name: Verify complete Linux rollout ownership coverage
         if: always() && !cancelled() && runner.os == 'Linux' && steps.prepare_bazel.outcome == 'success'

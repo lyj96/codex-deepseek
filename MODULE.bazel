@@ -17,6 +17,7 @@ single_version_override(
     patches = [
         "//patches:llvm_rusty_v8_custom_libcxx.patch",
         "//patches:llvm_windows_arm64_powl.patch",
+        "//patches:llvm_windows_header_parser.patch",
         "//patches:llvm_windows_mingw_compat.patch",
     ],
 )
@@ -211,6 +212,7 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:rules_rs_build_script_deps_annotation.patch",
+        "//patches:rules_rs_git_submodule_annotation.patch",
         "//patches:rules_rs_rust_debug_modes.patch",
         "//patches:rules_rs_windows_msvc_linker.patch",
         "//patches:rules_rs_workspace_package_version.patch",
@@ -617,10 +619,14 @@ crate.annotation(
         "x86_64-unknown-linux-musl": ["v8_enable_sandbox"],
     },
     gen_build_script = "on",
+    # Only the Rust crate checkout omits submodules. The archive and binding
+    # above still come from the separately pinned V8 source build repositories.
+    git_init_submodules = False,
     patch_args = ["-p1"],
     patches = [
         "//patches:rusty_v8_prebuilt_out_dir.patch",
     ],
+    version = "152.2.0",
 )
 
 inject_repo(crate, "v8_targets")
@@ -674,6 +680,8 @@ crate.annotation(
         "@rules_foreign_cc//toolchains:current_ninja_toolchain",
     ],
     crate = "opusic-sys",
+    patch_args = ["-p1"],
+    patches = ["//patches:opusic-sys_materialize_installed_headers.patch"],
 )
 
 # The musl CLI's allocator needs declared native tools and consistent header flags.

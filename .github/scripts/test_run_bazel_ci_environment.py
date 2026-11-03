@@ -18,6 +18,8 @@ class WindowsEnvironmentTest(unittest.TestCase):
         hosted=False,
         runner_os="Windows",
         command="build",
+        targets=("//example:target",),
+        target_triple=None,
     ):
         env = os.environ.copy()
         env.update(
@@ -32,6 +34,9 @@ class WindowsEnvironmentTest(unittest.TestCase):
         env.pop("SYSTEMROOT", None)
         env.pop("GITHUB_ACTIONS", None)
         env.pop("RUNNER_ENVIRONMENT", None)
+        env.pop("CODEX_BAZEL_TARGET_TRIPLE", None)
+        if target_triple is not None:
+            env["CODEX_BAZEL_TARGET_TRIPLE"] = target_triple
         if hosted:
             env.update(GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted")
         if uppercase:
@@ -55,7 +60,7 @@ class WindowsEnvironmentTest(unittest.TestCase):
                     command,
                     *args,
                     "--",
-                    "//example:target",
+                    *targets,
                 ],
                 env=env,
                 capture_output=True,
@@ -108,20 +113,59 @@ class WindowsEnvironmentTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("--disk_cache=", result.stdout)
 
+    def test_declared_matrix_target_survives_local_and_remote_defaults(self):
+        for runner_os, triple in (
+            ("Linux", "x86_64-unknown-linux-gnu"),
+            ("Linux", "x86_64-unknown-linux-musl"),
+            ("macOS", "x86_64-apple-darwin"),
+            ("macOS", "aarch64-apple-darwin"),
+            ("Windows", "x86_64-pc-windows-gnullvm"),
+        ):
+            for remote in (False, True):
+                with self.subTest(triple=triple, remote=remote):
+                    result = self.invoke(
+                        runner_os=runner_os, remote=remote, target_triple=triple
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    platform = f"--platforms=@rules_rs//rs/platforms:{triple}"
+                    self.assertEqual(result.stdout.count(platform), 1)
+                    self.assertNotIn(
+                        "--platforms=//:windows_x86_64_gnullvm", result.stdout
+                    )
+                    if remote:
+                        self.assertGreater(
+                            result.stdout.index(platform),
+                            result.stdout.index("--config=ci-"),
+                        )
+
+    def test_declared_target_preserves_explicit_platform_and_rejects_unknown(self):
+        for args in (("--platforms=//:custom",), ("--platforms", "//:custom")):
+            result = self.invoke(
+                runner_os="Linux",
+                args=args,
+                target_triple="x86_64-unknown-linux-musl",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(" ".join(args), result.stdout)
+            self.assertNotIn("--platforms=@rules_rs", result.stdout)
+        result = self.invoke(target_triple="unknown-target")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unsupported Bazel CI target", result.stderr)
+
     def test_local_windows_requires_identity(self):
         result = self.invoke(system_root="")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SystemRoot must be set", result.stderr)
 
     def test_rollout_strategy_is_limited_to_hosted_linux_tests(self):
-        strategy = (
-            "--strategy_regexp=^Testing //codex-rs/rollout:"
-            "rollout-unit-tests$=processwrapper-sandbox"
+        strategy = "--strategy=TestRunner=processwrapper-sandbox"
+        rollout = "//codex-rs/rollout:rollout-unit-tests"
+        result = self.invoke(
+            hosted=True, runner_os="Linux", command="test", targets=(rollout,)
         )
-        result = self.invoke(hosted=True, runner_os="Linux", command="test")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(strategy, result.stdout)
-        self.assertNotIn("--strategy=TestRunner=", result.stdout)
+        self.assertNotIn("--strategy_regexp=", result.stdout)
         for options in (
             dict(hosted=False, runner_os="Linux", command="test"),
             dict(hosted=True, runner_os="Linux", command="build"),
@@ -130,9 +174,16 @@ class WindowsEnvironmentTest(unittest.TestCase):
             dict(hosted=True, runner_os="Linux", command="test", remote=True),
         ):
             with self.subTest(options=options):
-                result = self.invoke(**options)
+                result = self.invoke(targets=(rollout,), **options)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertNotIn("--strategy_regexp=", result.stdout)
+                self.assertNotIn(strategy, result.stdout)
+        for targets in (("//...",), (rollout, "//example:target")):
+            with self.subTest(targets=targets):
+                result = self.invoke(
+                    hosted=True, runner_os="Linux", command="test", targets=targets
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn(strategy, result.stdout)
 
     def test_git_bash_uppercase_system_root(self):
         result = self.invoke(uppercase=True)

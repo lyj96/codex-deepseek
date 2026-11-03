@@ -44,6 +44,9 @@ wine_rust_test(
     name = "wine-test-support-unit-tests",
     timeout = "short",
     crate = ":wine_test_support",
+    # Fresh Wine prefixes compete with source compilation for local I/O and
+    # CPU. Schedule this suite after other local work, retaining its deadline.
+    tags = ["exclusive-if-local"],
     windows_binaries = {
         "wine-smoke": ":windows-smoke",
     },

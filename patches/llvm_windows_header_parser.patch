@@ -1,0 +1,59 @@
+# Use native CRT file/process APIs when the host compiler is MSVC.
+# Preserve POSIX behavior and propagate the compiler's real exit code.
+
+diff --git a/tools/internal/header_parser.c b/tools/internal/header_parser.c
+--- a/tools/internal/header_parser.c
++++ b/tools/internal/header_parser.c
+@@ -3,7 +3,13 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#ifdef _WIN32
++#include <io.h>
++#include <process.h>
++#include <sys/stat.h>
++#else
+ #include <unistd.h>
++#endif
+
+ int main(int argc, char **argv) {
+   const char *path = getenv("PARSE_HEADER");
+@@ -12,13 +18,22 @@
+     exit(2);
+   }
+
++#ifdef _WIN32
++  int fd = _open(path, _O_WRONLY | _O_CREAT, _S_IREAD | _S_IWRITE);
++#else
+   int fd = open(path, O_WRONLY | O_CREAT, 0666);
++#endif
+   if (fd < 0) {
+     fprintf(stderr, "header_parser: failed to touch %s: %s\n",
+             path, strerror(errno));
+     exit(2);
+   }
+-  if (close(fd) != 0) {
++#ifdef _WIN32
++  int close_status = _close(fd);
++#else
++  int close_status = close(fd);
++#endif
++  if (close_status != 0) {
+     fprintf(stderr, "header_parser: failed to close =%s: %s\n",
+             path, strerror(errno));
+     exit(2);
+@@ -31,7 +46,14 @@
+   }
+
+   argv[0] = (char *)clang_path;
++#ifdef _WIN32
++  int status = (int)_spawnv(_P_WAIT, clang_path, (const char *const *)argv);
++  if (status != -1) {
++    return status;
++  }
++#else
+   execv(clang_path, argv);
++#endif
+   fprintf(stderr, "header_parser: execv failed: %s\n", strerror(errno));
+   return 2;
+ }

@@ -74,13 +74,11 @@ async fn process_with_failing_wineserver_stop() -> Result<WineTestProcess> {
     let mut process = waiting_smoke_process().await?;
     let processes = process.processes.as_mut().expect("Wine process guard");
 
-    let mut command = TokioCommand::from(processes.stop_wineserver_command());
     log_wine_lifecycle(format_args!("pre-stopping wineserver for failure fixture"));
-    let status = command
-        .status()
+    processes
+        .stop_wineserver()
         .await
         .context("pre-stop isolated wineserver")?;
-    assert!(status.success(), "wineserver exited with {status}");
     log_wine_lifecycle(format_args!("failure fixture wineserver pre-stop finished"));
 
     processes.runtime.wineserver = processes.prefix.path().join("missing-wineserver");
@@ -400,18 +398,20 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
     .and_then(std::convert::identity);
     drop(session);
     let shutdown_result = timeout(Duration::from_secs(10), async {
-        let mut command = TokioCommand::new(&runtime.wineserver);
-        command
-            .args(["-k", "-w"])
-            .env("HOME", prefix.path())
-            .env("WINEPREFIX", prefix.path())
-            .env("XDG_RUNTIME_DIR", prefix.path())
-            .kill_on_drop(true);
-        let status = command.status().await.context("stop isolated wineserver")?;
-        anyhow::ensure!(
-            status.success() || status.code() == Some(1),
-            "wineserver exited with {status}"
-        );
+        for action in ["-k", "-w"] {
+            let mut command = TokioCommand::new(&runtime.wineserver);
+            command
+                .arg(action)
+                .env("HOME", prefix.path())
+                .env("WINEPREFIX", prefix.path())
+                .env("XDG_RUNTIME_DIR", prefix.path())
+                .kill_on_drop(true);
+            let status = command.status().await.context("stop isolated wineserver")?;
+            anyhow::ensure!(
+                status.success() || (action == "-k" && status.code() == Some(1)),
+                "wineserver {action} exited with {status}"
+            );
+        }
         Ok::<_, anyhow::Error>(())
     })
     .await
