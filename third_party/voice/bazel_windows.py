@@ -144,9 +144,7 @@ def main():
                             "utf8_bom": status_bytes.startswith(b"\xef\xbb\xbf"),
                             "line_count": len(status_lines),
                             "known_key_counts": {
-                                key: sum(
-                                    line.startswith(key + " ") for line in status_lines
-                                )
+                                key: sum(line.startswith(key + " ") for line in status_lines)
                                 for key in known_keys
                             },
                         },

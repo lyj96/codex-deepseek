@@ -220,7 +220,9 @@ impl WineProcesses {
                 );
                 Ok(())
             });
-        log_wine_lifecycle(format_args!("async child wait finished; stopping wineserver"));
+        log_wine_lifecycle(format_args!(
+            "async child wait finished; stopping wineserver"
+        ));
         let wineserver_result = async {
             let mut command = TokioCommand::from(self.stop_wineserver_command());
             let status = command.status().await.context("stop isolated wineserver")?;

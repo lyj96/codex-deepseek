@@ -445,9 +445,26 @@ async fn repo_ancestry_without_project_marker_does_not_walk_parents() {
     fs::create_dir_all(outer.join(".agents/skills")).expect("create outer skills");
     fs::create_dir_all(cwd.join(".agents/skills")).expect("create cwd skills");
 
+    // Keep root detection enabled, but make the absent marker specific to this
+    // fixture so an unrelated .git above the temporary directory cannot select
+    // a project root outside it.
+    let fixture_name = temp_dir.path().file_name().expect("temp directory name");
+    let marker = format!(".codex-test-root-{}", fixture_name.to_string_lossy());
+    for ancestor in cwd.ancestors() {
+        let error = fs::symlink_metadata(ancestor.join(&marker))
+            .expect_err("fixture project marker must be absent");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+    let mut config = empty_config();
+    config["project_root_markers"] = toml::Value::Array(vec![toml::Value::String(marker)]);
+    let config_stack = stack(vec![ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        config,
+    )]);
+
     let roots = repo_agents_skill_roots(
         Some(Arc::clone(&LOCAL_FS)),
-        &stack(Vec::new()),
+        &config_stack,
         &cwd,
         /*empty_remote_roots*/ None,
     )
