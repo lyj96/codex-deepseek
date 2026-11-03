@@ -265,6 +265,12 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUI
 fi
 
 post_config_bazel_args=()
+if [[ "${bazel_args[0]}" == "test" && "${RUNNER_OS:-}" == "Linux" && "${GITHUB_ACTIONS:-}" == "true" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+  # This ownership fixture needs the runner's supplementary groups. The Linux
+  # sandbox maps only one GID. Keep process cleanup and a separate execution
+  # directory for this test group; other actions retain their usual isolation.
+  post_config_bazel_args+=("--strategy_regexp=^Testing //codex-rs/rollout:rollout-unit-tests$=processwrapper-sandbox")
+fi
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
   has_target_platform_override=0
   for arg in "${bazel_args[@]}"; do

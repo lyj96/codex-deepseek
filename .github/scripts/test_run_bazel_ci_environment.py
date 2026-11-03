@@ -16,10 +16,12 @@ class WindowsEnvironmentTest(unittest.TestCase):
         uppercase=False,
         args=(),
         hosted=False,
+        runner_os="Windows",
+        command="build",
     ):
         env = os.environ.copy()
         env.update(
-            RUNNER_OS="Windows",
+            RUNNER_OS=runner_os,
             CODEX_BAZEL_BIN="echo",
             CODEX_BAZEL_WINDOWS_PATH="C:/Windows;C:/Tools",
             PROCESSOR_ARCHITECTURE="AMD64",
@@ -50,7 +52,7 @@ class WindowsEnvironmentTest(unittest.TestCase):
                     str(Path(directory) / "run-bazel-ci.sh"),
                     "--windows-cross-compile",
                     "--",
-                    "build",
+                    command,
                     *args,
                     "--",
                     "//example:target",
@@ -110,6 +112,27 @@ class WindowsEnvironmentTest(unittest.TestCase):
         result = self.invoke(system_root="")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SystemRoot must be set", result.stderr)
+
+    def test_rollout_strategy_is_limited_to_hosted_linux_tests(self):
+        strategy = (
+            "--strategy_regexp=^Testing //codex-rs/rollout:"
+            "rollout-unit-tests$=processwrapper-sandbox"
+        )
+        result = self.invoke(hosted=True, runner_os="Linux", command="test")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(strategy, result.stdout)
+        self.assertNotIn("--strategy=TestRunner=", result.stdout)
+        for options in (
+            dict(hosted=False, runner_os="Linux", command="test"),
+            dict(hosted=True, runner_os="Linux", command="build"),
+            dict(hosted=True, runner_os="Windows", command="test"),
+            dict(hosted=True, runner_os="macOS", command="test"),
+            dict(hosted=True, runner_os="Linux", command="test", remote=True),
+        ):
+            with self.subTest(options=options):
+                result = self.invoke(**options)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("--strategy_regexp=", result.stdout)
 
     def test_git_bash_uppercase_system_root(self):
         result = self.invoke(uppercase=True)

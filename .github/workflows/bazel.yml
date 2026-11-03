@@ -115,6 +115,23 @@ jobs:
             -- \
             "${bazel_targets[@]}"
 
+      - name: Verify complete Linux rollout ownership coverage
+        if: always() && !cancelled() && runner.os == 'Linux' && steps.prepare_bazel.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=bazel-testlogs/codex-rs/rollout/rollout-unit-tests/test.log
+          test -s "$log"
+          mkdir -p "$RUNNER_TEMP/bazel-execution-logs"
+          cp "$log" "$RUNNER_TEMP/bazel-execution-logs/rollout-unit-tests.log"
+          cat "$log"
+          if grep -Fq 'skipping ownership regression' "$log"; then
+            echo 'Alternate-group ownership assertions did not run' >&2
+            exit 1
+          fi
+          grep -Fq 'test compression::tests::worker_preserves_alternate_group_through_materialization ... ok' "$log"
+          grep -Fq 'test result: ok. 162 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$log"
+
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true
