@@ -135,6 +135,10 @@ def main():
                     "STABLE_GIT_COMMIT",
                 )
                 status_lines = status_bytes.decode("utf-8", errors="replace").splitlines()
+                key_counts = {}
+                for key in known_keys:
+                    prefix = key + " "
+                    key_counts[key] = sum(line.startswith(prefix) for line in status_lines)
                 print(
                     "Workspace status diagnostics: "
                     + json.dumps(
@@ -143,10 +147,7 @@ def main():
                             "sha256": hashlib.sha256(status_bytes).hexdigest(),
                             "utf8_bom": status_bytes.startswith(b"\xef\xbb\xbf"),
                             "line_count": len(status_lines),
-                            "known_key_counts": {
-                                key: sum(line.startswith(key + " ") for line in status_lines)
-                                for key in known_keys
-                            },
+                            "known_key_counts": key_counts,
                         },
                         sort_keys=True,
                     ),
