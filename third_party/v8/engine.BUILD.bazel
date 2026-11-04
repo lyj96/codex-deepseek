@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 load("@@//third_party/v8:engine_rules.bzl", "v8_build_config", "v8_fixed_source_features")
+load("@@//third_party/v8:snapshot_platform.bzl", "v8_snapshot_platform")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_binary", "py_test")
@@ -21,6 +22,9 @@ load("@v8_python_deps//:requirements.bzl", "requirement")
 
 # Used by the Codex-owned pip hub; pin changes travel with the V8 source.
 exports_files(["bazel/requirements.txt"])
+
+# Read by the snapshot action through its resolved exec transition.
+v8_snapshot_platform(name = "snapshot_execution_platform")
 
 # Codex V8 source policy. Only ABI, runtime and target CPU vary, selected by
 # artifact profiles. CPU selection lives in bazel/config.

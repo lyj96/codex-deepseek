@@ -24,6 +24,7 @@ exports_files([
     "native_windows.bzl",
     "push_registers_gnullvm.S",
     "simdutf.BUILD.bazel",
+    "snapshot_platform.bzl",
     "v8_defs.patch",
 ])
 

@@ -440,7 +440,8 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 }
                 // PTY reads can split a redraw after the reconnect notice is erased but
                 // before it is repainted. Only inspect completed synchronized updates.
-                if command == "discovered"
+                if (command == "discovered"
+                    || steps.front().is_some_and(|(_, input)| *input == b"\x14"))
                     && output
                         .rfind("\x1b[?2026l")
                         .is_none_or(|end| output[end..].contains("\x1b[?2026h"))
@@ -456,6 +457,11 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 if let Some((ready, input)) = steps.front()
                     && text.contains(ready)
                 {
+                    // A startup header can precede warning delivery and the live composer.
+                    // Open the detailed transcript only after its warning badge is rendered.
+                    if *input == b"\x14" && !text.contains("warning") {
+                        continue;
+                    }
                     if command == "agents-untrusted" && *ready == "Notasksyet" {
                         if !text.contains("enteropennnew") {
                             continue;

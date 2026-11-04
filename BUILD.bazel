@@ -90,6 +90,44 @@ alias(
     actual = "@rbe_platform",
 )
 
+# Linux can execute GNU and statically linked musl test binaries on its GNU
+# host. Map only TestRunner compatibility; compiler target constraints and
+# the test execution strategy remain unchanged.
+toolchain(
+    name = "linux_gnu_tests_on_gnu_host_toolchain",
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+        "@llvm//constraints/libc:gnu.2.28",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+        "@rules_rs//rs/platforms/constraints:glibc",
+        "@llvm//constraints/libc:unconstrained",
+    ],
+    toolchain = "@bazel_tools//tools/test:empty_toolchain",
+    toolchain_type = "@bazel_tools//tools/test:default_test_toolchain_type",
+)
+
+toolchain(
+    name = "linux_musl_tests_on_gnu_host_toolchain",
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+        "@llvm//constraints/libc:gnu.2.28",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+        "@rules_rs//rs/platforms/constraints:musl",
+        "@llvm//constraints/libc:musl",
+        "@llvm//constraints/pie:off",
+    ],
+    toolchain = "@bazel_tools//tools/test:empty_toolchain",
+    toolchain_type = "@bazel_tools//tools/test:default_test_toolchain_type",
+)
+
 exports_files([
     "workspace_root_test_launcher.bat.tpl",
     "workspace_root_test_launcher.sh.tpl",

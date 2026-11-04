@@ -801,6 +801,19 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
         ]);
 
         let permission_profile = PermissionProfile::workspace_write();
+        for path in [
+            test_root.path(),
+            workspace.as_path(),
+            outside_root.as_path(),
+            outside_file.as_path(),
+            protected_git_dir.as_path(),
+        ] {
+            eprintln!(
+                "delete fixture initial DACL {}: {}",
+                path.display(),
+                fixture_dacl(path)
+            );
+        }
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
             workspace_roots_for(workspace.as_path()).as_slice(),
@@ -826,6 +839,14 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
                 .await;
         let stdout = String::from_utf8_lossy(&stdout);
 
+        for path in [test_root.path(), workspace.as_path(), outside_root.as_path()] {
+            eprintln!(
+                "delete fixture final DACL {}: {}",
+                path.display(),
+                fixture_dacl(path)
+            );
+        }
+
         assert_eq!(
             (
                 exit_code,
@@ -840,6 +861,42 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
             sandbox_log(codex_home.path())
         );
     });
+}
+
+// Read only the private fixture's ACL. Preserve the original launch and deletion
+// assertions while distinguishing inherited runner permissions from setup errors.
+fn fixture_dacl(path: &Path) -> String {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+
+    unsafe {
+        let (_dacl, descriptor) = match crate::acl::fetch_dacl_handle(path) {
+            Ok(value) => value,
+            Err(error) => return format!("unavailable: {error:#}"),
+        };
+        let mut text = std::ptr::null_mut();
+        let mut length = 0;
+        let converted = ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor,
+            /*requestedstringsdrevision*/ 1,
+            DACL_SECURITY_INFORMATION,
+            &mut text,
+            &mut length,
+        );
+        let result = if converted != 0 && !text.is_null() && length > 0 {
+            String::from_utf16_lossy(std::slice::from_raw_parts(text, length as usize - 1))
+        } else {
+            format!("conversion failed: {}", std::io::Error::last_os_error())
+        };
+        if !text.is_null() {
+            LocalFree(text.cast());
+        }
+        if !descriptor.is_null() {
+            LocalFree(descriptor);
+        }
+        result
+    }
 }
 
 #[test]

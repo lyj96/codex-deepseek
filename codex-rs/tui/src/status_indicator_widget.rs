@@ -69,6 +69,8 @@ pub(crate) struct StatusIndicatorWidget {
     frame_requester: FrameRequester,
     animations_enabled: bool,
     effects: codex_config::types::TuiEffects,
+    #[cfg(test)]
+    snapshot_now: Option<Instant>,
 }
 
 // Format elapsed seconds into a compact human-friendly form used by the status line.
@@ -108,6 +110,8 @@ impl StatusIndicatorWidget {
             frame_requester,
             animations_enabled,
             effects,
+            #[cfg(test)]
+            snapshot_now: None,
         }
     }
 
@@ -171,6 +175,11 @@ impl StatusIndicatorWidget {
         self.details.as_deref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn freeze_for_snapshot(&mut self, now: Instant) {
+        self.snapshot_now = Some(now);
+    }
+
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
         self.show_interrupt_hint = visible;
     }
@@ -226,7 +235,10 @@ impl StatusIndicator<'_> {
     // wide Unicode characters, remapped interrupt hints, and elapsed-time text.
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let row = self.row;
+        #[cfg(not(test))]
         let now = Instant::now();
+        #[cfg(test)]
+        let now = row.snapshot_now.unwrap_or_else(Instant::now);
         let elapsed_duration = self.timer.display_started_at.map_or_else(
             || self.timer.elapsed_at(now),
             |started_at| now.saturating_duration_since(started_at),
@@ -238,8 +250,17 @@ impl StatusIndicator<'_> {
             MotionMode::from_animations_enabled(row.animations_enabled && row.effects.shimmer);
 
         let mut spans = Vec::with_capacity(5);
+        let indicator_start = Some(self.timer.last_resume_at);
+        #[cfg(test)]
+        let indicator_start = if row.snapshot_now.is_some() {
+            // Geometry snapshots explicitly select the first animation frame.
+            // Other tests and production still exercise the live clock.
+            None
+        } else {
+            indicator_start
+        };
         if let Some(indicator) = activity_indicator(
-            Some(self.timer.last_resume_at),
+            indicator_start,
             progress,
             ReducedMotionIndicator::Hidden,
         ) {

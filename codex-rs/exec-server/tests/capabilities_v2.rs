@@ -213,7 +213,13 @@ async fn discover(
             serde_json::to_value(params)?,
         )
         .await
-        .with_context(|| format!("discover V2 for {}", params.cwd))?,
+        .with_context(|| {
+            format!(
+                "discover V2 for {} (sandboxed={})",
+                params.cwd,
+                params.sandbox.is_some()
+            )
+        })?,
     )?)
 }
 
@@ -222,6 +228,7 @@ async fn request(
     method: &str,
     params: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
+    let started = std::time::Instant::now();
     let id = server.send_request(method, params).await?;
     let message = server
         .wait_for_event(|event| {
@@ -230,7 +237,7 @@ async fn request(
             ) || matches!(event, JSONRPCMessage::Error(error) if error.id == id)
         })
         .await
-        .with_context(|| format!("waiting for {method}"))?;
+        .with_context(|| format!("waiting for {method} after {:?}", started.elapsed()))?;
     match message {
         JSONRPCMessage::Response(response) => Ok(response.result),
         other => anyhow::bail!("{method} failed: {other:?}"),

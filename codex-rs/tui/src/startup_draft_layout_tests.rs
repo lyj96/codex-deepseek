@@ -20,9 +20,11 @@ fn owned_startup_keeps_the_live_bottom_geometry() {
     layout.render(area, &mut buffer);
     let frame = (area.y..area.bottom())
         .map(|y| {
-            (area.x..area.right())
+            let row = (area.x..area.right())
                 .map(|x| buffer[(x, y)].symbol())
-                .collect::<String>()
+                .collect::<String>();
+            // Keep every padding cell visible to the snapshot and whitespace checks.
+            format!("{row}|")
         })
         .collect::<Vec<_>>()
         .join("\n");

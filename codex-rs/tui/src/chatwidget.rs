@@ -1767,6 +1767,11 @@ impl ChatWidget {
     }
 
     #[cfg(test)]
+    pub(crate) fn freeze_status_for_snapshot(&mut self) {
+        self.bottom_pane.freeze_status_for_snapshot();
+    }
+
+    #[cfg(test)]
     pub(crate) fn is_task_running_for_test(&self) -> bool {
         self.bottom_pane.is_task_running()
     }

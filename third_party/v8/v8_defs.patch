@@ -3,14 +3,22 @@
 # and dependency choices live in third_party/v8/engine.BUILD.bazel. ABI,
 # runtime and CPU settings are internal outputs of artifact_profile.bzl.
 # Preserve Chromium libc++ headers/runtime, Clang Windows driver flags, and
-# the Windows target-ABI snapshot tool. The optional
+# the Windows target-ABI snapshot tool and native macOS engine reuse. The optional
 # Linux backtrace link flag is omitted because that feature is fixed off.
 # On a V8 pin change, review these hunks and build the native canary matrix.
 
 diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bzl
 --- a/orig/v8-15.2.124.1/bazel/defs.bzl
 +++ b/mod/v8-15.2.124.1/bazel/defs.bzl
-@@ -19,7 +19,7 @@
+@@ -6,6 +6,7 @@
+ This module contains helper functions to compile V8.
+ """
+
++load("@@//third_party/v8:snapshot_platform.bzl", "V8SnapshotPlatformInfo")
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+@@ -19,7 +20,7 @@
 
  _create_option_flag = rule(
      implementation = _options_impl,
@@ -19,7 +27,7 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
      attrs = {
          "scope": attr.string(),
      },
-@@ -27,7 +27,7 @@
+@@ -27,7 +28,7 @@
 
  _create_option_string = rule(
      implementation = _options_impl,
@@ -28,7 +36,7 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
      attrs = {
          "scope": attr.string(),
      },
-@@ -42,12 +42,30 @@
+@@ -42,12 +43,30 @@
  )
 
  def v8_flag(name, default = False):
@@ -65,7 +73,7 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
 
  def v8_int(name, default = 0):
      _create_option_int(name = name, build_setting_default = default, scope = "universal")
-@@ -106,7 +124,18 @@
+@@ -106,7 +125,18 @@
 
  def _default_args():
      return struct(
@@ -85,7 +93,7 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
          defines = select({
              "@v8//bazel/config:is_windows": [
                  "UNICODE",
-@@ -136,11 +165,27 @@
+@@ -136,11 +166,27 @@
              ],
              "//conditions:default": [],
          }) + select({
@@ -118,7 +126,7 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
              ],
              "@v8//bazel/config:is_gcc": [
                  "-Wno-extra",
-@@ -161,9 +206,17 @@
+@@ -161,9 +207,17 @@
                  "-std=gnu++2a",
              ],
              "@v8//bazel/config:is_windows": [
@@ -139,7 +147,7 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
          }) + select({
              "@v8//bazel/config:is_gcc_fastbuild": [
                  # Non-debug builds without optimizations fail because
-@@ -186,16 +239,18 @@
+@@ -186,16 +240,18 @@
          }),
          includes = ["include"],
          linkopts = select({
@@ -163,7 +171,7 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
          }),
      )
 
-@@ -466,6 +521,12 @@
+@@ -466,6 +522,22 @@
  def _mksnapshot(ctx):
      prefix = ctx.attr.prefix
      suffix = ctx.attr.suffix
@@ -172,11 +180,21 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
 +    # snapshot generator must match the target ABI and run on the Windows
 +    # runner. Action strategies only choose where an action runs; they cannot
 +    # change this executable from the exec to the target configuration.
-+    tool = ctx.executable.target_tool if ctx.attr.target_os == "win" else ctx.executable.tool
++    execution = ctx.attr._snapshot_execution_platform[V8SnapshotPlatformInfo]
++    target_cpu = ""
++    if ctx.target_platform_has_constraint(ctx.attr._arm64[platform_common.ConstraintValueInfo]):
++        target_cpu = "arm64"
++    elif ctx.target_platform_has_constraint(ctx.attr._x64[platform_common.ConstraintValueInfo]):
++        target_cpu = "x64"
++    # On native macOS the generator can link the same engine objects as the
++    # target archive. An exec transition otherwise compiles that entire engine
++    # again. Cross-OS/CPU builds retain the exec-configured generator.
++    native_macos = ctx.attr.target_os == "mac" and execution.macos and target_cpu and execution.cpu == target_cpu
++    tool = ctx.executable.target_tool if ctx.attr.target_os == "win" or native_macos else ctx.executable.tool
      outs = [
          ctx.actions.declare_file(prefix + "/snapshot" + suffix + ".cc"),
          ctx.actions.declare_file(prefix + "/embedded" + suffix + ".S"),
-@@ -483,9 +544,22 @@
+@@ -483,9 +555,22 @@
              "--embedded_src",
              outs[1].path,
          ] + ctx.attr.args,
@@ -200,10 +218,17 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
      return [DefaultInfo(files = depset(outs))]
 
  _v8_mksnapshot = rule(
-@@ -498,6 +572,13 @@
+@@ -498,6 +583,20 @@
              executable = True,
              cfg = "exec",
          ),
++        "_snapshot_execution_platform": attr.label(
++            default = Label("@v8//:snapshot_execution_platform"),
++            providers = [V8SnapshotPlatformInfo],
++            cfg = "exec",
++        ),
++        "_arm64": attr.label(default = "@platforms//cpu:aarch64"),
++        "_x64": attr.label(default = "@platforms//cpu:x86_64"),
 +        "target_tool": attr.label(
 +            mandatory = True,
 +            allow_files = True,
@@ -214,7 +239,7 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
          "target_os": attr.string(mandatory = True),
          "prefix": attr.string(mandatory = True),
          "suffix": attr.string(mandatory = True),
-@@ -511,6 +592,11 @@
+@@ -511,6 +610,11 @@
          args = args,
          prefix = "noicu",
          tool = ":noicu/mksnapshot" + suffix,
@@ -226,7 +251,7 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
          suffix = suffix,
          target_os = select({
              "@v8//bazel/config:is_macos": "mac",
-@@ -523,6 +609,11 @@
+@@ -523,6 +627,11 @@
          args = args,
          prefix = "icu",
          tool = ":icu/mksnapshot" + suffix,

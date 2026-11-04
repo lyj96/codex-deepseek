@@ -61,7 +61,7 @@ async fn assert_timed_out_git_wrapper_does_not_leave_child_process_running(
         .env("RELEASE_WRAPPER_FILE", &release_wrapper_file);
 
     let (mut wrapper, process_tree) = spawn_git_command(&mut command).expect("spawn Git wrapper");
-    let child_pid = tokio::time::timeout(Duration::from_secs(30), async {
+    let readiness = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if let Ok(child_pid) = std::fs::read_to_string(&child_pid_file)
                 && !child_pid.trim().is_empty()
@@ -72,8 +72,29 @@ async fn assert_timed_out_git_wrapper_does_not_leave_child_process_running(
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
-    .await
-    .expect("wait for Git wrapper child readiness");
+    .await;
+    if readiness.is_err() {
+        eprintln!(
+            "Git fixture readiness failed: wrapper={:?}, child_pid={:?}, ready={}",
+            wrapper.try_wait(),
+            std::fs::read_to_string(&child_pid_file),
+            child_ready_file.exists(),
+        );
+        if let Some(mut stderr) = wrapper.stderr.take() {
+            let mut bytes = Vec::new();
+            // This only collects evidence after the unchanged readiness deadline failed.
+            let read = tokio::time::timeout(
+                Duration::from_millis(/*millis*/ 100),
+                tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut bytes),
+            )
+            .await;
+            eprintln!(
+                "Git fixture stderr ({read:?}): {}",
+                String::from_utf8_lossy(&bytes)
+            );
+        }
+    }
+    let child_pid = readiness.expect("wait for Git wrapper child readiness");
 
     if matches!(wrapper_lifetime, GitWrapperLifetime::ExitBeforeTimeout) {
         std::fs::write(&release_wrapper_file, "release").expect("release Git wrapper");

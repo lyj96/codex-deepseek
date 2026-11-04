@@ -265,6 +265,27 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUI
 fi
 
 post_config_bazel_args=()
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  case "${bazel_args[0]}" in
+    build|test|coverage)
+      # Provenance receipts consume ctx.info_file. Pin the repository's status
+      # producer after runner/remote rc configuration instead of depending on
+      # the effective rc command to supply STABLE_GIT_COMMIT.
+      if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+        post_config_bazel_args+=(--workspace_status_command=./scripts/workspace-status.cmd)
+      else
+        post_config_bazel_args+=(--workspace_status_command=./scripts/workspace-status.sh)
+      fi
+      ;;
+  esac
+fi
+if [[ "${RUNNER_OS:-}" == "Linux" && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+  case "${CODEX_BAZEL_TARGET_TRIPLE:-}" in
+    x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl)
+      post_config_bazel_args+=(--extra_toolchains=//:linux_gnu_tests_on_gnu_host_toolchain,//:linux_musl_tests_on_gnu_host_toolchain)
+      ;;
+  esac
+fi
 if [[ -n "${CODEX_BAZEL_TARGET_TRIPLE:-}" ]]; then
   case "$CODEX_BAZEL_TARGET_TRIPLE" in
     aarch64-apple-darwin|x86_64-apple-darwin|x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl|x86_64-pc-windows-gnullvm|x86_64-pc-windows-msvc) ;;

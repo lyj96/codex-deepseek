@@ -42,6 +42,7 @@ async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> R
                 ),
                 /*replay_kind*/ None,
             );
+            app.chat_widget.freeze_status_for_snapshot();
         }
         let size = Size::new(width, /*height*/ 12);
         tui.screen_size_for_event(&TuiEvent::Resize(size))?;

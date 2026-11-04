@@ -571,6 +571,8 @@ mod windows_impl {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use std::collections::HashMap;
     use std::io;
+    use std::os::windows::io::FromRawHandle;
+    use std::os::windows::io::OwnedHandle;
     use std::path::Path;
     use std::ptr;
     use std::sync::Arc;
@@ -759,6 +761,9 @@ mod windows_impl {
             cwd,
             capability_roots,
         )?;
+        // SAFETY: Preparation transfers a new token to this capture. Owning it
+        // here also closes it if ACL or pipe preparation fails before spawn.
+        let token_handle = unsafe { OwnedHandle::from_raw_handle(security.h_token) };
         allow_null_device_for_workspace_write(uses_write_capabilities);
         apply_legacy_session_acl_rules(
             &permissions,
@@ -805,7 +810,6 @@ mod windows_impl {
                     CloseHandle(out_w);
                     CloseHandle(err_r);
                     CloseHandle(err_w);
-                    CloseHandle(security.h_token);
                 }
                 return Err(err);
             }
@@ -910,8 +914,8 @@ mod windows_impl {
             if !pi.hProcess.is_null() {
                 CloseHandle(pi.hProcess);
             }
-            CloseHandle(security.h_token);
         }
+        drop(token_handle);
         let _ = t_out.join();
         let _ = t_err.join();
         let stdout = rx_out.recv().unwrap_or_default();

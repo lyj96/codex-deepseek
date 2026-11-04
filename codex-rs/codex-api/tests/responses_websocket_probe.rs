@@ -107,7 +107,7 @@ async fn probe_distinguishes_untrusted_certificates_from_io_failures() -> anyhow
     Ok(())
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Reply {
     EmptyClose,
     CloseWithReason,
@@ -133,6 +133,7 @@ async fn probe_preserves_evidence_and_redacts_wire_secrets() {
             .await
             .expect("bind fixture");
         let address = listener.local_addr().expect("fixture address");
+        let (probe_finished, wait_for_probe) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept fixture");
             let mut request = Vec::new();
@@ -184,7 +185,11 @@ async fn probe_preserves_evidence_and_redacts_wire_secrets() {
                     frame.extend_from_slice(b"private-close-reason");
                     socket.write_all(&frame).await.expect("write frame");
                 }
-                Reply::HoldOpen => tokio::time::sleep(Duration::from_millis(/*millis*/ 50)).await,
+                // Keep the connection open until the client has finished its
+                // unchanged observation window, even when the runner is busy.
+                Reply::HoldOpen => {
+                    let _ = wait_for_probe.await;
+                }
                 // Unassigned opcode 3 does not depend on extension negotiation.
                 Reply::MalformedFrame => socket.write_all(&[0x83, 0]).await.expect("write frame"),
                 Reply::Rejected => (),
@@ -207,6 +212,7 @@ async fn probe_preserves_evidence_and_redacts_wire_secrets() {
         )
         .await
         .expect("probe finishes");
+        let _ = probe_finished.send(());
         let (status, headers, close) = match result {
             Ok(probe) => {
                 assert!(matches!(
@@ -249,7 +255,7 @@ async fn probe_preserves_evidence_and_redacts_wire_secrets() {
                         (status, headers.expect("rejected headers"), None)
                     }
                     _ => {
-                        assert!(matches!(reply, Reply::MalformedFrame));
+                        assert!(matches!(reply, Reply::MalformedFrame), "reply: {reply:?}");
                         (
                             error.status.expect("received 101"),
                             error.headers.expect("received headers"),

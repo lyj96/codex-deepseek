@@ -727,6 +727,17 @@ impl BottomPane {
         self.status_timer.reset(elapsed);
     }
 
+    #[cfg(test)]
+    pub(crate) fn freeze_status_for_snapshot(&mut self) {
+        let now = Instant::now();
+        self.status_timer.reset(Duration::ZERO);
+        self.status_timer.display_started_at = None;
+        self.status
+            .as_mut()
+            .expect("snapshot requires an active status row")
+            .freeze_for_snapshot(now);
+    }
+
     pub(crate) fn set_status_timer_origin(&mut self, started_at: Option<Instant>) {
         self.status_timer.display_started_at = started_at;
         self.request_redraw();

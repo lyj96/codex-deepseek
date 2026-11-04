@@ -73,7 +73,6 @@ struct LegacyProcessHandles {
     writer_handle: tokio::task::JoinHandle<()>,
     hpc: Option<HPCON>,
     conpty_owner: Option<ConptyInstance>,
-    token_handle: HANDLE,
     desktop: Option<LaunchDesktop>,
 }
 
@@ -171,7 +170,6 @@ fn spawn_legacy_process(
         writer_handle,
         hpc,
         conpty_owner,
-        token_handle: h_token,
         desktop,
     })
 }
@@ -379,6 +377,9 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         cwd,
         capability_roots,
     )?;
+    // SAFETY: Preparation returns a new token owned by this launch. Keep it
+    // owned before fallible ACL setup so every early return closes it.
+    let token_handle = unsafe { OwnedHandle::from_raw_handle(security.h_token) };
     allow_null_device_for_workspace_write(common.uses_write_capabilities);
 
     apply_legacy_session_acl_rules(
@@ -411,9 +412,8 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         writer_handle,
         hpc,
         mut conpty_owner,
-        token_handle,
         desktop,
-    } = match spawn_legacy_process(
+    } = spawn_legacy_process(
         &security,
         &common.permissions,
         &additional_deny_write_paths,
@@ -427,15 +427,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         stderr_rx.as_ref().map(|(tx, _rx)| tx.clone()),
         writer_rx,
         common.logs_base_dir.as_deref(),
-    ) {
-        Ok(handles) => handles,
-        Err(err) => {
-            unsafe {
-                CloseHandle(security.h_token);
-            }
-            return Err(err);
-        }
-    };
+    )?;
     let hpc_handle = hpc.map(|hpc| Arc::new(StdMutex::new(Some(hpc))));
 
     let process_handle = Arc::new(StdMutex::new(Some(NonOwningProcessHandle(pi.hProcess))));
@@ -443,8 +435,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let wait_process_handle = NonOwningProcessHandle(pi.hProcess);
     // SAFETY: Successful process creation transfers this thread handle to the wait path.
     let thread_handle = unsafe { OwnedHandle::from_raw_handle(pi.hThread) };
-    // SAFETY: spawn_legacy_process transfers the restricted token on success.
-    let token_handle = unsafe { OwnedHandle::from_raw_handle(token_handle) };
     let job_for_wait = Arc::clone(&job);
     let command_for_wait = command.clone();
     let hpc_for_wait = hpc_handle.clone();

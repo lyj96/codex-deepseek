@@ -470,6 +470,7 @@ async fn conpty_ctrl_c_interrupts_powershell_foreground_child() -> anyhow::Resul
         return Ok(());
     };
     let args = vec!["-NoLogo".to_string(), "-NoProfile".to_string()];
+    eprintln!("Ctrl-C fixture PowerShell: {program:?}");
     let env: HashMap<String, String> = std::env::vars().collect();
     let spawned = spawn_pty_process(
         &program,
