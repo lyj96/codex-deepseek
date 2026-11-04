@@ -1,3 +1,4 @@
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_foreign_cc//toolchains/native_tools:native_tools_toolchain.bzl", "native_tool_toolchain")
 load(":native.bzl", "native_prefix")
@@ -190,13 +191,39 @@ _NATIVE_PLATFORMS = [
 
 [
     config_setting(
-        name = os + "_" + cpu,
+        name = os + "_" + cpu + ("_llvm_gnu" if os == "linux" else ""),
         constraint_values = [
             "@platforms//os:" + os,
             "@platforms//cpu:" + cpu,
         ] + (["@llvm//constraints/libc:gnu.2.28"] if os == "linux" else []),
     )
     for os, cpu, _ in _NATIVE_PLATFORMS
+]
+
+# rules_rs GNU targets explicitly use glibc with unconstrained LLVM libc.
+# Keep that identity separate from musl and retain the legacy LLVM GNU match.
+[
+    config_setting(
+        name = "linux_" + cpu + "_rules_rs_gnu",
+        constraint_values = [
+            "@platforms//os:linux",
+            "@platforms//cpu:" + cpu,
+            "@rules_rs//rs/platforms/constraints:glibc",
+            "@llvm//constraints/libc:unconstrained",
+        ],
+    )
+    for cpu in ("aarch64", "x86_64")
+]
+
+[
+    selects.config_setting_group(
+        name = "linux_" + cpu,
+        match_any = [
+            ":linux_" + cpu + "_llvm_gnu",
+            ":linux_" + cpu + "_rules_rs_gnu",
+        ],
+    )
+    for cpu in ("aarch64", "x86_64")
 ]
 
 [
@@ -329,6 +356,7 @@ label_flag(
 [
     config_setting(
         name = "windows_" + cpu + "_msvc",
+        visibility = ["//codex-rs/voice-host:__pkg__"],
         constraint_values = [
             "@platforms//os:windows",
             "@platforms//cpu:" + cpu,

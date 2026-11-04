@@ -4,6 +4,9 @@ load("//bazel/rules:runtime_package.bzl", "release_binary")
 codex_rust_crate(
     name = "code-mode-host",
     crate_name = "codex_code_mode_host",
+    # Each instance retains its production 100 ms JS execution watchdog.
+    # Keep this capacity test from competing with local compilers or other V8 hosts.
+    serial_integration_tests = ["code-mode-host-ui_plugin_wire-test"],
 )
 
 release_binary(

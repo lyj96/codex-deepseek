@@ -953,6 +953,7 @@ mod windows_impl {
         ) else {
             return Ok(());
         };
+        super::spawn_prep::reject_legacy_backend()?;
         if !permissions.uses_write_capabilities_for_cwd(cwd, env_map) {
             return Ok(());
         }

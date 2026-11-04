@@ -28,6 +28,8 @@ use super::parse_windows_sandbox_wrapper_args;
 
 #[test]
 fn large_deny_list_uses_environment_without_changing_the_request() {
+    let _accounts = codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire()
+        .expect("lock Windows sandbox test accounts");
     let temp = tempfile::tempdir().expect("tempdir");
     let cwd = AbsolutePathBuf::from_absolute_path(temp.path()).expect("absolute command cwd");
     let paths = (0..1000)
@@ -50,7 +52,7 @@ fn large_deny_list_uses_environment_without_changing_the_request() {
         std::slice::from_ref(&cwd),
         &mut env,
         &profile,
-        WindowsSandboxLevel::RestrictedToken,
+        WindowsSandboxLevel::Elevated,
         /*proxy_enforced*/ true,
         /*network_proxy_restricting_sid*/ Some("S-1-5-21-100-200-300-400"),
         crate::WindowsSandboxProxySettingsMode::Preserve,
@@ -93,6 +95,8 @@ fn large_deny_list_uses_environment_without_changing_the_request() {
 
 #[test]
 fn windows_wrapper_args_round_trip() {
+    let _accounts = codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire()
+        .expect("lock Windows sandbox test accounts");
     let temp = tempfile::tempdir().expect("tempdir");
     let command_cwd =
         AbsolutePathBuf::from_absolute_path(temp.path()).expect("absolute command cwd");
@@ -123,7 +127,7 @@ fn windows_wrapper_args_round_trip() {
         workspace_roots.as_slice(),
         &mut env,
         &permission_profile,
-        WindowsSandboxLevel::RestrictedToken,
+        WindowsSandboxLevel::Elevated,
         /*proxy_enforced*/ true,
         /*network_proxy_restricting_sid*/ Some("S-1-5-21-100-200-300-400"),
         crate::WindowsSandboxProxySettingsMode::Preserve,
@@ -165,7 +169,7 @@ fn windows_wrapper_args_round_trip() {
     assert_eq!(parsed.permission_profile, permission_profile);
     assert_eq!(
         parsed.windows_sandbox_level,
-        WindowsSandboxLevel::RestrictedToken
+        WindowsSandboxLevel::Elevated
     );
     let desktop = crate::desktop::LaunchDesktop::open_private(&parsed.private_desktop_name)
         .expect("wrapper must receive a live private desktop");

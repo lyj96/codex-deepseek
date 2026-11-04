@@ -75,8 +75,11 @@ fn reconstruct_rollout_uses_recipient_projection_without_changing_sender_evidenc
         } else {
             communication.content
         };
+        assert!(matches!(projected.history[0].item, ResponseItem::AgentMessage { .. }));
+        let mut wire_item = projected.history[0].item.clone();
+        crate::agent_communication::project_agent_message_for_external_provider(&mut wire_item);
         assert_eq!(
-            serde_json::to_value(&projected.history[0].item).unwrap(),
+            serde_json::to_value(&wire_item).unwrap(),
             json!({
                 "type": "message",
                 "role": "user",

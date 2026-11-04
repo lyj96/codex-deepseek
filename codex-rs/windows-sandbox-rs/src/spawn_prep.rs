@@ -120,6 +120,13 @@ pub(crate) fn prepare_spawn_context_common(
     })
 }
 
+pub(crate) const LEGACY_BACKEND_UNSUPPORTED: &str =
+    "The legacy Windows sandbox backend cannot enforce deletion isolation; use the elevated Windows sandbox backend after completing its setup";
+
+pub(crate) fn reject_legacy_backend() -> Result<()> {
+    anyhow::bail!(LEGACY_BACKEND_UNSUPPORTED)
+}
+
 pub(crate) fn prepare_legacy_spawn_context(
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
@@ -129,6 +136,9 @@ pub(crate) fn prepare_legacy_spawn_context(
     command: &[String],
     options: SpawnPrepOptions,
 ) -> Result<SpawnContext> {
+    // Reject before environment preparation, capability persistence, or ACL writes.
+    // Never fall back to an unrestricted process or provision another backend here.
+    reject_legacy_backend()?;
     let common = prepare_spawn_context_common(
         permission_profile,
         workspace_roots,
@@ -514,31 +524,27 @@ mod tests {
     }
 
     #[test]
-    fn legacy_spawn_env_applies_offline_network_rewrite() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let cwd = TempDir::new().expect("tempdir");
-        let mut env_map = HashMap::new();
-        let workspace_roots = workspace_roots_for(cwd.path());
-
-        let _context = prepare_legacy_spawn_context(
+    fn legacy_spawn_rejects_before_environment_or_home_mutation() {
+        let temp = TempDir::new().expect("tempdir");
+        let codex_home = temp.path().join("unused-home");
+        let mut env_map = HashMap::from([("HTTP_PROXY".to_string(), "unchanged".to_string())]);
+        let original_env = env_map.clone();
+        let result = prepare_legacy_spawn_context(
             &PermissionProfile::workspace_write(),
-            workspace_roots.as_slice(),
-            codex_home.path(),
-            cwd.path(),
+            workspace_roots_for(temp.path()).as_slice(),
+            &codex_home,
+            temp.path(),
             &mut env_map,
             &["cmd.exe".to_string()],
             SpawnPrepOptions {
                 inherit_path: true,
                 add_git_safe_directory: false,
             },
-        )
-        .expect("legacy env prep");
-
-        assert_eq!(env_map.get("SBX_NONET_ACTIVE"), Some(&"1".to_string()));
-        assert_eq!(
-            env_map.get("HTTP_PROXY"),
-            Some(&"http://127.0.0.1:9".to_string())
         );
+        let error = result.err().expect("legacy backend must be rejected");
+        assert_eq!(error.to_string(), super::LEGACY_BACKEND_UNSUPPORTED);
+        assert_eq!(env_map, original_env);
+        assert!(!codex_home.exists());
     }
 
     #[test]

@@ -1900,6 +1900,12 @@ async fn assert_remote_windows_sandbox_process_write(
     if expected_sandbox_type == codex_sandboxing::SandboxType::WindowsMxc {
         crate::skip_if_mxc_unavailable!(Ok(()));
     }
+    #[cfg(windows)]
+    let _accounts = if expected_sandbox_type == codex_sandboxing::SandboxType::WindowsRestrictedToken {
+        Some(common::exec_server::prepare_windows_sandbox_test()?)
+    } else {
+        None
+    };
     let context = create_process_context(/*use_remote*/ true).await?;
     let workspace = TempDir::new()?;
     let blocked_file = workspace.path().join("blocked.txt");
@@ -1910,7 +1916,7 @@ async fn assert_remote_windows_sandbox_process_write(
     )?;
     match expected_sandbox_type {
         codex_sandboxing::SandboxType::WindowsRestrictedToken => {
-            sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+            sandbox.windows_sandbox_selection = WindowsSandboxSelection::Elevated;
         }
         codex_sandboxing::SandboxType::WindowsMxc => {
             sandbox.windows_sandbox_selection = WindowsSandboxSelection::Mxc;

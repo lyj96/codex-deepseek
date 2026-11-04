@@ -21,6 +21,7 @@ use tracing::Instrument;
 use tracing::Span;
 use tracing::field;
 use tracing::info_span;
+use tracing::instrument::WithSubscriber;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
@@ -420,7 +421,7 @@ impl Session {
             done_clone.notify_waiters();
         }
         .instrument(task_span);
-        let handle = tokio::spawn(storage_originator.scope(task_future));
+        let handle = tokio::spawn(storage_originator.scope(task_future).with_current_subscriber());
         let timer = turn_context
             .session_telemetry
             .start_timer(TURN_E2E_DURATION_METRIC, &[])

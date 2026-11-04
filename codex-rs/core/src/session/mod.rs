@@ -215,6 +215,7 @@ use tracing::error;
 use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
+use tracing::instrument::WithSubscriber;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -1039,14 +1040,18 @@ impl Session {
             .as_ref()
             .and_then(|startup| startup.session_teardown(thread_id));
         let session_for_loop = Arc::clone(&session);
-        let session_loop_handle = tokio::spawn(Box::pin(storage_originator.scope(async move {
-            submission_loop(session_for_loop, configured_config, rx_sub)
-                .instrument(info_span!("session_loop", thread_id = %thread_id))
-                .await;
-            if let Some(tree_teardown) = tree_teardown {
-                tree_teardown.complete();
-            }
-        })));
+        let session_loop_handle = tokio::spawn(Box::pin(
+            storage_originator
+                .scope(async move {
+                    submission_loop(session_for_loop, configured_config, rx_sub)
+                        .instrument(info_span!("session_loop", thread_id = %thread_id))
+                        .await;
+                    if let Some(tree_teardown) = tree_teardown {
+                        tree_teardown.complete();
+                    }
+                })
+                .with_current_subscriber(),
+        ));
         let io = SessionIo {
             tx_sub,
             rx_event,

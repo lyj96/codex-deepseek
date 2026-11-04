@@ -93,27 +93,7 @@ async fn tmpdir_uses_command_environment_over_rpc(
     }
     #[cfg(windows)]
     let _account_guard = if selection == WindowsSandboxSelection::Elevated {
-        let guard = codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire()?;
-        // The RPC server re-enters this test executable, as in file_system_windows.
-        let executable = std::env::current_exe()?;
-        let resources = executable
-            .parent()
-            .context("Windows test executable should have a parent directory")?
-            .join("codex-resources");
-        if let Err(error) = std::fs::create_dir_all(&resources)
-            && !(error.kind() == std::io::ErrorKind::PermissionDenied && resources.is_dir())
-        {
-            return Err(error).context("create Windows sandbox test resources");
-        }
-        for name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
-            let source = codex_utils_cargo_bin::cargo_bin(name)?;
-            let destination = resources.join(std::path::Path::new(name).with_extension("exe"));
-            if let Err(error) = codex_utils_cargo_bin::copy_executable(&source, &destination)
-                && !(error.kind() == std::io::ErrorKind::PermissionDenied && destination.is_file())
-            {
-                return Err(error).with_context(|| format!("stage Windows sandbox helper {name}"));
-            }
-        }
+        let guard = common::exec_server::prepare_windows_sandbox_test()?;
         Some(guard)
     } else {
         None

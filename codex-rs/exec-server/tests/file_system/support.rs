@@ -27,6 +27,8 @@ pub(crate) struct FileSystemContext {
     pub(crate) file_system: Arc<dyn ExecutorFileSystem>,
     _helper_paths: Option<TestCodexHelperPaths>,
     _server: Option<ExecServerHarness>,
+    #[cfg(windows)]
+    _accounts: codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -47,6 +49,8 @@ impl fmt::Display for FileSystemImplementation {
 pub(crate) async fn create_file_system_context(
     implementation: FileSystemImplementation,
 ) -> Result<FileSystemContext> {
+    #[cfg(windows)]
+    let accounts = crate::common::exec_server::prepare_windows_sandbox_test()?;
     match implementation {
         FileSystemImplementation::Local => {
             let helper_paths = test_codex_helper_paths()?;
@@ -58,6 +62,8 @@ pub(crate) async fn create_file_system_context(
                 file_system: Arc::new(LocalFileSystem::with_runtime_paths(runtime_paths)),
                 _helper_paths: Some(helper_paths),
                 _server: None,
+                #[cfg(windows)]
+                _accounts: accounts,
             })
         }
         FileSystemImplementation::Remote => {
@@ -68,6 +74,8 @@ pub(crate) async fn create_file_system_context(
                 file_system: environment.get_filesystem(),
                 _helper_paths: None,
                 _server: Some(server),
+                #[cfg(windows)]
+                _accounts: accounts,
             })
         }
     }
@@ -124,8 +132,7 @@ pub(crate) fn workspace_write_sandbox(
     writable_root: std::path::PathBuf,
 ) -> FileSystemSandboxContext {
     let writable_root = absolute_path(writable_root);
-    // Keep the runtime policy aligned with the legacy workspace-write projection used by the
-    // unelevated restricted-token preflight.
+    // Preserve the original workspace-write policy while exercising the supported backend.
     let policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry::new(
             FileSystemPath::Special {
@@ -144,7 +151,7 @@ pub(crate) fn workspace_write_sandbox(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         PathUri::from_abs_path(&writable_root),
     );
-    sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+    sandbox.windows_sandbox_selection = WindowsSandboxSelection::Elevated;
     sandbox
 }
 
@@ -153,8 +160,7 @@ fn sandbox_context(
     cwd: PathUri,
 ) -> FileSystemSandboxContext {
     if cfg!(windows) {
-        // Restricted-token sandboxing cannot enforce read restrictions, so leave the root
-        // readable while exercising the requested write restrictions.
+        // Preserve the original root-read policy while exercising the requested write restrictions.
         entries.push(FileSystemSandboxEntry::new(
             FileSystemPath::Special {
                 value: FileSystemSpecialPath::Root,
@@ -170,7 +176,7 @@ fn sandbox_context(
         cwd,
     );
     if cfg!(windows) {
-        sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+        sandbox.windows_sandbox_selection = WindowsSandboxSelection::Elevated;
     }
     sandbox
 }

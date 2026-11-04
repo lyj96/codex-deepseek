@@ -81,7 +81,7 @@ pub(crate) fn current_test_binary_helper_paths() -> anyhow::Result<(PathBuf, Opt
 }
 
 fn maybe_run_delayed_output_after_exit_from_test_binary() {
-    let mut args = env::args();
+    let mut args = codex_utils_process::startup_args();
     let _program = args.next();
     let Some(command) = args.next() else {
         return;
@@ -157,7 +157,7 @@ fn run_delayed_output_after_exit_child(release_path: &Path) {
 }
 
 fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard>) {
-    let mut args = env::args();
+    let mut args = codex_utils_process::startup_args();
     let _program = args.next();
     let Some(command) = args.next() else {
         return;

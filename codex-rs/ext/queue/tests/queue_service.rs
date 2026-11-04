@@ -168,12 +168,16 @@ if payload["prompt"] == "blocked":
     );
     std::fs::write(&script_path, script)
         .unwrap_or_else(|error| panic!("write queue hook script: {error}"));
+    #[cfg(windows)]
+    let command = format!("python \"{}\"", script_path.display());
+    #[cfg(not(windows))]
+    let command = format!("python3 \"{}\"", script_path.display());
     let hooks = serde_json::json!({
         "hooks": {
             "UserPromptSubmit": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("python3 {}", script_path.display()),
+                    "command": command,
                 }]
             }]
         }

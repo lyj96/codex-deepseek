@@ -16,6 +16,8 @@ use pretty_assertions::assert_eq;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_rpc_refreshes_metadata_and_enforces_sandbox() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    let _accounts = common::exec_server::prepare_windows_sandbox_test()?;
     let home = tempfile::tempdir()?;
     let home_path = std::fs::canonicalize(home.path())?;
     let codex_home = tempfile::tempdir()?;
@@ -34,6 +36,24 @@ async fn v2_rpc_refreshes_metadata_and_enforces_sandbox() -> anyhow::Result<()> 
         &skills,
         "---\nname: demo\ndescription: original\n---\nPRIVATE INSTRUCTION BODY",
     )?;
+    #[cfg(windows)]
+    {
+        // Provision this private test home before timing RPCs. The supported
+        // backend needs accounts; the original five-second RPC deadline remains.
+        use codex_windows_sandbox::ResolvedWindowsSandboxPermissions;
+
+        let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
+            &codex_protocol::models::PermissionProfile::read_only(),
+        )?;
+        let env_map = std::env::vars().collect();
+        codex_windows_sandbox::run_elevated_setup(codex_windows_sandbox::SandboxSetupRequest {
+            permissions: &permissions,
+            command_cwd: &home_path,
+            env_map: &env_map,
+            codex_home: &codex_home_path,
+            proxy_enforced: false,
+        })?;
+    }
     let mut server = exec_server_with_env(
         [
             ("HOME", &home_path),
@@ -157,7 +177,7 @@ async fn v2_rpc_refreshes_metadata_and_enforces_sandbox() -> anyhow::Result<()> 
             );
             assert!(!serde_json::to_string(&response)?.contains("mail@market"));
         }
-        // Windows restricted tokens reject split read access; a supported read-only policy succeeds.
+        // The retired backend still rejects split reads; the supported backend enforces read-only.
         #[cfg(windows)]
         {
             let Err(error) = discover(&mut server, &restricted).await else {
@@ -174,7 +194,7 @@ async fn v2_rpc_refreshes_metadata_and_enforces_sandbox() -> anyhow::Result<()> 
                 cwd.clone(),
             )?;
             sandbox.windows_sandbox_selection =
-                codex_exec_server::WindowsSandboxSelection::RestrictedToken;
+                codex_exec_server::WindowsSandboxSelection::Elevated;
             let permitted = DiscoverV2CapabilitiesRequest {
                 cwd: cwd.clone(),
                 sandbox: Some(sandbox),

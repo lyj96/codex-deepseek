@@ -303,6 +303,7 @@ pub struct ModelClient {
     event_sender: Option<Sender<ProtocolEvent>>,
     http_client_factory: HttpClientFactory,
     restored_history: bool,
+    native_agent_messages: bool,
     request_contributors: Vec<Arc<dyn codex_extension_api::ModelRequestContributor>>,
     executed_tool_calls: Option<ExecutedToolCalls>,
     // Resolved once when the session is created, like other session feature flags.
@@ -643,6 +644,7 @@ impl ModelClient {
             http_client_factory,
             runtime_auth: None,
             restored_history: false,
+            native_agent_messages: false,
             request_contributors,
             executed_tool_calls: None,
             api_key_cyber_access_programs:
@@ -735,6 +737,12 @@ impl ModelClient {
         } else {
             self.session_derived_cache_key(metadata)
         }
+    }
+
+    /// Bind native agent-message support to the configured provider identity, not its display name.
+    pub fn with_agent_message_provider_id(mut self, provider_id: &str) -> Self {
+        self.native_agent_messages = provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID;
+        self
     }
 
     /// Creates a fresh turn-scoped streaming session.
@@ -1029,6 +1037,11 @@ impl ModelClient {
         include_internal: bool,
     ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info);
+        if !self.native_agent_messages {
+            for item in &mut input {
+                crate::agent_communication::project_agent_message_for_external_provider(item);
+            }
+        }
         if !self.reasoning_effort_override_enabled(model_info) {
             // Unsupported models and disabled overrides must also accept saved history.
             // Filter only the request copy; persisted history remains unchanged.

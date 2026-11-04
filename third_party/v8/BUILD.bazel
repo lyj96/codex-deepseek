@@ -22,6 +22,7 @@ exports_files([
     "icu.BUILD.bazel",
     "libcxx_rules.bzl",
     "native_windows.bzl",
+    "native_generator_reuse.patch",
     "push_registers_gnullvm.S",
     "simdutf.BUILD.bazel",
     "snapshot_platform.bzl",

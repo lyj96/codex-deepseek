@@ -341,7 +341,8 @@ impl MemoryStartupContext {
             config.http_client_factory(),
             config.workspace_routing_context(),
             Vec::new(),
-        );
+        )
+        .with_agent_message_provider_id(&config.model_provider_id);
 
         let mut client_session = model_client.new_session();
         let window_id = format!("{}:0", self.thread_id);

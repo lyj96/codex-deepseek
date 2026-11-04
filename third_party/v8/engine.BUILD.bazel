@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-load("@@//third_party/v8:engine_rules.bzl", "v8_build_config", "v8_fixed_source_features")
+load("@@//third_party/v8:engine_rules.bzl", "v8_build_config", "v8_fixed_source_features", "v8_generated_file")
 load("@@//third_party/v8:snapshot_platform.bzl", "v8_snapshot_platform")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
@@ -534,22 +534,16 @@ filegroup(
     ],
 )
 
-genrule(
+v8_generated_file(
     name = "generated_bytecode_builtins_list",
-    srcs = [],
-    outs = ["builtins-generated/bytecodes-builtins-list.h"],
-    cmd = "$(location :bytecode_builtins_list_generator) $@",
-    cmd_bat = "$(location :bytecode_builtins_list_generator) $@",
-    tools = [":bytecode_builtins_list_generator"],
+    out = "builtins-generated/bytecodes-builtins-list.h",
+    tool = ":bytecode_builtins_list_generator",
 )
 
-genrule(
+v8_generated_file(
     name = "generated_regexp_special_case",
-    srcs = [],
-    outs = ["src/regexp/special-case.cc"],
-    cmd = "$(location :regexp_special_case_generator) $@",
-    cmd_bat = "$(location :regexp_special_case_generator) $@",
-    tools = [":regexp_special_case_generator"],
+    out = "src/regexp/special-case.cc",
+    tool = ":regexp_special_case_generator",
 )
 
 v8_mksnapshot(

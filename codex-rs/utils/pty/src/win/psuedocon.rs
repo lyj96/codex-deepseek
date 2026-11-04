@@ -54,6 +54,8 @@ use winapi::um::winbase::EXTENDED_STARTUPINFO_PRESENT;
 use winapi::um::winbase::STARTF_USESTDHANDLES;
 use winapi::um::winbase::STARTUPINFOEXW;
 use winapi::um::wincon::COORD;
+use winapi::um::wincon::GetConsoleCP;
+use winapi::um::wincon::SetConsoleCtrlHandler;
 use winapi::um::winnt::HANDLE;
 use winapi::um::winnt::OSVERSIONINFOW;
 
@@ -188,6 +190,18 @@ impl PsuedoCon {
 
         let cwd = resolve_current_directory(&cmd);
         let mut env_block = build_environment_block(&cmd);
+
+        // A launcher can disable Ctrl-C with CREATE_NEW_PROCESS_GROUP. That
+        // attribute is inherited even by clients attached to a new ConPTY.
+        // Clear the inherited ignore attribute before creating an interactive
+        // client; registered control handlers remain installed.
+        // A detached GUI/stdio launcher has no console handler table to reset.
+        if unsafe { GetConsoleCP() } != 0
+            && unsafe { SetConsoleCtrlHandler(None, /*Add*/ 0) } == 0
+        {
+            let error = IoError::last_os_error();
+            bail!("failed to enable Ctrl-C for ConPTY clients: {error}");
+        }
 
         let res = unsafe {
             CreateProcessW(

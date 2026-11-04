@@ -242,7 +242,7 @@ async fn drop_does_not_wait_for_a_blocked_query_or_start_another() {
 }
 
 #[test]
-fn monitor_requires_tmux_detection() {
+fn monitor_matches_platform_and_multiplexer() {
     let (draw_tx, _) = broadcast::channel(/*capacity*/ 1);
     let mut info = TerminalInfo {
         backend: None,
@@ -253,12 +253,18 @@ fn monitor_requires_tmux_detection() {
         multiplexer: None,
     };
     let size = Size::new(/*width*/ 80, /*height*/ 24);
-    assert!(SizeMonitor::start(&info, size, draw_tx.clone()).is_none());
+    assert_eq!(
+        SizeMonitor::start(&info, size, draw_tx.clone()).is_some(),
+        cfg!(windows)
+    );
     info.multiplexer = Some(Multiplexer::Zellij { version: None });
-    assert!(SizeMonitor::start(&info, size, draw_tx.clone()).is_none());
+    assert_eq!(
+        SizeMonitor::start(&info, size, draw_tx.clone()).is_some(),
+        cfg!(windows)
+    );
     info.multiplexer = Some(Multiplexer::Tmux { version: None });
     assert_eq!(
         SizeMonitor::start(&info, size, draw_tx).is_some(),
-        cfg!(unix)
+        cfg!(unix) || cfg!(windows)
     );
 }

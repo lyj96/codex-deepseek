@@ -446,10 +446,22 @@ async fn child_turn_start_preserves_root_attribution() -> Result<()> {
             .iter()
             .all(|(_, event)| { event.root_turn_id.as_ref() == Some(root_turn_id) })
     );
-    logs_assert(|lines: &[&str]| {
-        let logs: Vec<_> = lines
-            .iter()
-            .filter(|line| line.contains("codex.agent_response"))
+    // Session tasks have independent tracing roots. Select their actual thread IDs
+    // from the captured events instead of requiring the test function's span.
+    let captured = tracing_test::internal::global_buf()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let captured = String::from_utf8(captured)?;
+    {
+        let logs: Vec<_> = captured
+            .lines()
+            .filter(|line| {
+                line.contains("codex.agent_response")
+                    && starts
+                        .iter()
+                        .any(|(id, _)| line.contains(&format!(" conversation.id={id}")))
+            })
             .collect();
         assert_eq!(logs.len(), 2);
         for (id, turn) in &starts {
@@ -478,8 +490,7 @@ async fn child_turn_start_preserves_root_attribution() -> Result<()> {
                 assert!(line.contains(&field), "missing {field}: {line}");
             }
         }
-        Ok(())
-    });
+    }
     Ok(())
 }
 

@@ -273,7 +273,8 @@ async fn complete_managed_worktree_creation(
     );
     loop {
         let event = tokio::time::timeout(Duration::from_secs(15), events.recv())
-            .await?
+            .await
+            .map_err(|error| color_eyre::eyre::eyre!("waiting for managed checkout: {error}"))?
             .ok_or_else(|| color_eyre::eyre::eyre!("worktree creation event channel closed"))?;
         if matches!(event, AppEvent::ManagedWorktreeCreated(_)) {
             app.handle_event(tui, server, event).await?;
@@ -3973,7 +3974,8 @@ terminal_visualization_instructions = true
     assert!(app.pending_managed_worktree_creation);
     let created = loop {
         let event = tokio::time::timeout(Duration::from_secs(15), events.recv())
-            .await?
+            .await
+            .map_err(|error| color_eyre::eyre::eyre!("waiting for stale checkout: {error}"))?
             .ok_or_else(|| color_eyre::eyre::eyre!("worktree completion channel closed"))?;
         if let AppEvent::ManagedWorktreeCreated(created) = event {
             break created;
@@ -4182,7 +4184,8 @@ terminal_visualization_instructions = true
         std::time::Duration::from_secs(/*secs*/ 5),
         browser_rx.recv(),
     )
-    .await?
+    .await
+    .map_err(|error| color_eyre::eyre::eyre!("waiting for annotated worktree browser: {error}"))?
     else {
         panic!("browser must return annotated worktrees");
     };

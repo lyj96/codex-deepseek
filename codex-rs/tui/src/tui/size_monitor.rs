@@ -1,4 +1,4 @@
-//! Recovers lost tmux resize notifications without querying geometry on the UI thread.
+//! Recovers lost Windows and tmux resize notifications off the UI thread.
 //!
 //! One worker belongs to the event broker, including across nested screens. Queries never
 //! hold the shared lock. Pauses and newer geometry invalidate both in-flight and queued
@@ -37,12 +37,22 @@ impl SizeMonitor {
         size: Size,
         draw_tx: broadcast::Sender<()>,
     ) -> Option<Self> {
-        if !cfg!(unix) || !matches!(terminal_info.multiplexer, Some(Multiplexer::Tmux { .. })) {
+        let needs_monitor = cfg!(windows)
+            || cfg!(unix) && matches!(terminal_info.multiplexer, Some(Multiplexer::Tmux { .. }));
+        if !needs_monitor {
             return None;
         }
         Self::spawn(size, draw_tx, || {
-            // Unlike terminal::size(), window_size() has no tput subprocess fallback.
-            crossterm::terminal::window_size().map(|size| Size::new(size.columns, size.rows))
+            #[cfg(windows)]
+            {
+                // The Windows implementation queries the console directly.
+                crossterm::terminal::size().map(|(columns, rows)| Size::new(columns, rows))
+            }
+            #[cfg(not(windows))]
+            {
+                // Unlike terminal::size(), window_size() has no tput fallback.
+                crossterm::terminal::window_size().map(|size| Size::new(size.columns, size.rows))
+            }
         })
         .inspect_err(|error| tracing::warn!(%error, "Failed to start terminal size monitor"))
         .ok()

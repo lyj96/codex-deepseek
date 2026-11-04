@@ -2344,6 +2344,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-path-uri",
+ "codex-utils-process",
  "pretty_assertions",
  "similar",
  "tempfile",
@@ -2367,6 +2368,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
+ "codex-utils-process",
  "codex-utils-pty",
  "codex-windows-sandbox",
  "dotenvy",
@@ -3281,6 +3283,7 @@ dependencies = [
  "codex-utils-rustls-provider",
  "codex-websocket-auth",
  "codex-websocket-client",
+ "codex-windows-sandbox",
  "codex-windows-sandbox-test-support",
  "ctor 0.6.3",
  "dirs",
@@ -3917,6 +3920,7 @@ dependencies = [
  "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "codex-utils-process",
  "globset",
  "landlock",
  "libc",
@@ -4945,6 +4949,7 @@ name = "codex-test-binary-support"
 version = "0.166.0"
 dependencies = [
  "codex-arg0",
+ "codex-utils-process",
  "tempfile",
 ]
 

@@ -67,7 +67,7 @@ def _workspace_root_test_impl(ctx):
     )
 
     runfiles = ctx.runfiles(files = [test_bin, workspace_root_marker]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
-    for data_dep in ctx.attr.data:
+    for data_dep in ctx.attr.data + ctx.attr.windows_dll_runtime:
         runfiles = runfiles.merge(ctx.runfiles(files = data_dep[DefaultInfo].files.to_list()))
         runfiles = runfiles.merge(data_dep[DefaultInfo].default_runfiles)
     for runfile_dep in ctx.attr.runfile_env:
@@ -110,6 +110,18 @@ def _bash_runfile_env_exports(ctx):
 
 def _windows_runfile_env_exports(ctx):
     lines = []
+    # Only explicitly declared, pinned runtime libraries enter this test's PATH.
+    # Resolve their runfiles first so manifest-only Windows runs also work.
+    dll_directories = {}
+    for runtime in ctx.attr.windows_dll_runtime:
+        for file in runtime[DefaultInfo].default_runfiles.files.to_list():
+            if file.extension.lower() == "dll":
+                dll_directories.setdefault(file.dirname, file)
+    for directory in sorted(dll_directories):
+        file = dll_directories[directory]
+        lines.append('call :resolve_runfile "{}"'.format(_runfile_logical_path(file)))
+        lines.append("if errorlevel 1 exit /b 1")
+        lines.append('for %%I in ("!resolve_runfile_result!") do set "PATH=%%~dpI;!PATH!"')
     for runfile_dep, env_var in ctx.attr.runfile_env.items():
         runfile = _runfile_env_file(runfile_dep)
         lines.append('call :resolve_runfile "{}"'.format(_runfile_logical_path(runfile)))
@@ -163,6 +175,7 @@ workspace_root_test = rule(
             mandatory = True,
         ),
         "test_threads": attr.int(),
+        "windows_dll_runtime": attr.label_list(),
         "workspace_root_marker": attr.label(
             allow_single_file = True,
             mandatory = True,
@@ -236,7 +249,9 @@ def codex_rust_crate(
         unit_test_args = [],
         binary_test_target_compatible_with = [],
         integration_test_timeout = None,
+        serial_integration_tests = [],
         test_data_extra = [],
+        test_windows_dll_runtime = None,
         test_shard_counts = {},
         test_tags = [],
         test_threads = 0,
@@ -289,7 +304,12 @@ def codex_rust_crate(
         binary_test_target_compatible_with: Platform constraints for binary unit tests.
         integration_test_timeout: Optional Bazel timeout for integration test
             targets generated from `tests/*.rs`.
+        serial_integration_tests: Exact integration target names whose wall-clock-sensitive
+            cases run serially after local compilation and other tests. Sandbox and timeouts
+            are unchanged; remote execution remains available.
         test_data_extra: Extra runtime data for tests.
+        test_windows_dll_runtime: Explicit native runtime targets whose DLL runfiles
+            must be discoverable at process startup. Other tests keep their PATH.
         test_shard_counts: Mapping from generated test target name to Bazel
             shard count. Matching tests use native Bazel sharding on the outer
             workspace-root launcher, not rules_rust's inner sharding wrapper.
@@ -427,6 +447,7 @@ def codex_rust_crate(
         workspace_root_test(
             name = unit_test_name,
             env = test_env,
+            windows_dll_runtime = [] if test_windows_dll_runtime == None else test_windows_dll_runtime,
             runfile_env = {
                 binary: "CARGO_BIN_EXE_" + Label(binary).name
                 for binary in extra_binaries
@@ -515,6 +536,7 @@ def codex_rust_crate(
         workspace_root_test(
             name = binary_unit_test_name,
             env = test_env,
+            windows_dll_runtime = [] if test_windows_dll_runtime == None else test_windows_dll_runtime,
             test_bin = ":" + binary_unit_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             target_compatible_with = binary_test_target_compatible_with,
@@ -575,6 +597,7 @@ def codex_rust_crate(
     if integration_test_timeout:
         integration_test_kwargs["timeout"] = integration_test_timeout
 
+    unmatched_serial_tests = {target: True for target in serial_integration_tests}
     for test in native.glob(["tests/*.rs"], allow_empty = True):
         test_file_stem = test.removeprefix("tests/").removesuffix(".rs")
         test_crate_name = test_file_stem.replace("-", "_")
@@ -585,6 +608,11 @@ def codex_rust_crate(
 
         test_kwargs = {}
         test_kwargs.update(integration_test_kwargs)
+        integration_target_tags = test_tags
+        if test_name in serial_integration_tests:
+            unmatched_serial_tests.pop(test_name)
+            test_kwargs["args"] = integration_test_args + ["--test-threads=1"]
+            integration_target_tags = test_tags + ["exclusive-if-local"]
         test_shard_count = _test_shard_count(test_shard_counts, test_name)
         if test_shard_count:
             # Put Bazel sharding on the label users/CI invoke. Do not set
@@ -614,7 +642,8 @@ def codex_rust_crate(
         #    owns cleanup. The outer workspace_root_test resolves the runner,
         #    test, and server from runfiles, sets a Cargo-like cwd, and applies
         #    the native test's shard count.
-        if test_shard_count:
+        use_test_wrapper = test_shard_count or test_windows_dll_runtime != None
+        if use_test_wrapper:
             # This target is intentionally a binary-like helper, not the public
             # test target. The wrapper below owns cwd setup, runfile env
             # materialization, sharding, and flaky retry behavior.
@@ -636,13 +665,15 @@ def codex_rust_crate(
                 ],
                 rustc_env = rustc_env,
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
-                tags = test_tags + ["manual"],
+                tags = integration_target_tags + ["manual"],
                 version = crate_version,
             )
 
             workspace_root_test(
                 name = test_name,
+                chdir_workspace_root = bool(test_shard_count),
                 env = test_env,
+                windows_dll_runtime = [] if test_windows_dll_runtime == None else test_windows_dll_runtime,
                 # CARGO_BIN_EXE_* values are rlocation paths at analysis time.
                 # The launcher rewrites them to absolute paths at execution
                 # time so tests keep working after chdir_workspace_root and on
@@ -652,7 +683,7 @@ def codex_rust_crate(
                 test_threads = test_threads,
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
-                tags = test_tags,
+                tags = integration_target_tags,
                 **test_kwargs
             )
         else:
@@ -679,14 +710,14 @@ def codex_rust_crate(
                 rustc_env = rustc_env,
                 env = integration_test_cargo_env,
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
-                tags = test_tags,
+                tags = integration_target_tags,
                 version = crate_version,
                 **test_kwargs
             )
 
         if run_tests_with_wine_exec:
             wine_test_name = test_name.removesuffix("-test") + "-wine-exec-test"
-            native_test_binary = ":" + (integration_test_binary if test_shard_count else test_name)
+            native_test_binary = ":" + (integration_test_binary if use_test_wrapper else test_name)
             wine_test_binaries = dict(wine_host_binaries)
 
             wine_exec_server = wine_test_name + "-windows-exec-server"
@@ -709,7 +740,7 @@ def codex_rust_crate(
             wine_runfile_env[native_test_binary] = "CODEX_WINE_EXEC_TEST_BINARY"
 
             wine_test_kwargs = {}
-            wine_test_kwargs.update(integration_test_kwargs)
+            wine_test_kwargs.update(test_kwargs)
             if test_shard_count:
                 wine_test_kwargs["shard_count"] = test_shard_count
                 wine_test_kwargs["flaky"] = True
@@ -727,12 +758,12 @@ def codex_rust_crate(
                 target_compatible_with = WINE_TEST_TARGET_COMPATIBLE_WITH,
                 # This wrapper has no Rust sources and transitions a data
                 # dependency to a Windows toolchain the lint does not register.
-                tags = test_tags + ["no-argument-comment-lint"],
+                tags = integration_target_tags + ["no-argument-comment-lint"],
                 **wine_test_kwargs
             )
 
         windows_cross_test_kwargs = {}
-        windows_cross_test_kwargs.update(integration_test_kwargs)
+        windows_cross_test_kwargs.update(test_kwargs)
         if test_shard_count:
             windows_cross_test_kwargs["shard_count"] = test_shard_count
             windows_cross_test_kwargs["flaky"] = True
@@ -753,7 +784,7 @@ def codex_rust_crate(
             rustc_env = rustc_env,
             env = integration_test_cargo_env,
             target_compatible_with = WINDOWS_GNULLVM_ONLY,
-            tags = test_tags + ["manual"],
+            tags = integration_target_tags + ["manual"],
             version = crate_version,
         )
 
@@ -765,9 +796,12 @@ def codex_rust_crate(
             test_bin = ":" + windows_cross_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             target_compatible_with = WINDOWS_GNULLVM_ONLY,
-            tags = test_tags,
+            tags = integration_target_tags,
             **windows_cross_test_kwargs
         )
+
+    if unmatched_serial_tests:
+        fail("Unknown serial integration tests: {}".format(sorted(unmatched_serial_tests)))
 
 def _test_shard_count(test_shard_counts, test_name):
     shard_count = test_shard_counts.get(test_name)

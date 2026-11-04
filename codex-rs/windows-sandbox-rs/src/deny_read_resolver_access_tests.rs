@@ -101,6 +101,8 @@ fn protected_directory_does_not_discard_accessible_deny_matches() {
         // this fixture's ACL. Restrict a separate process, including its rg child,
         // rather than changing the shared test process's privileges. The parent
         // owns ACL setup and cleanup, which the restricted child cannot perform.
+        let _accounts = codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire()
+            .expect("lock Windows sandbox test accounts");
         let codex_home = TempDir::new().expect("restricted codex home");
         let cwd = AbsolutePathBuf::from_absolute_path(temp.path()).expect("workspace");
         let mut env = std::collections::HashMap::from([
@@ -116,25 +118,34 @@ fn protected_directory_does_not_discard_accessible_deny_matches() {
                 env.insert(name.to_string(), value);
             }
         }
-        let result = crate::run_windows_sandbox_capture(
-            &codex_protocol::models::PermissionProfile::workspace_write(),
-            std::slice::from_ref(&cwd),
-            codex_home.path(),
-            vec![
-                std::env::current_exe()
-                    .expect("test binary")
-                    .display()
-                    .to_string(),
-                "--exact".to_string(),
-                std::thread::current()
-                    .name()
-                    .expect("test name")
-                    .to_string(),
-            ],
-            cwd.as_path(),
-            env,
-            /*timeout_ms*/ Some(30_000),
-            /*cancellation*/ None,
+        let result = crate::run_windows_sandbox_capture_for_permission_profile_elevated(
+            crate::ElevatedSandboxProfileCaptureRequest {
+                permission_profile: &codex_protocol::models::PermissionProfile::workspace_write(),
+                workspace_roots: std::slice::from_ref(&cwd),
+                codex_home: codex_home.path(),
+                command: vec![
+                    std::env::current_exe()
+                        .expect("test binary")
+                        .display()
+                        .to_string(),
+                    "--exact".to_string(),
+                    std::thread::current()
+                        .name()
+                        .expect("test name")
+                        .to_string(),
+                ],
+                cwd: cwd.as_path(),
+                env_map: env,
+                timeout_ms: Some(30_000),
+                cancellation: None,
+                proxy_enforced: false,
+                network_proxy_restricting_sid: None,
+                read_roots_override: None,
+                read_roots_include_platform_defaults: true,
+                write_roots_override: None,
+                deny_read_paths_override: &[],
+                deny_write_paths_override: &[],
+            },
         )
         .expect("run protected-directory regression without backup privileges");
         let stdout = String::from_utf8_lossy(&result.stdout);

@@ -60,9 +60,9 @@ impl Arg0PathEntryGuard {
 
 pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     #[cfg(target_os = "linux")]
-    codex_utils_pty::init_spawn_helper(std::env::args_os());
+    codex_utils_pty::init_spawn_helper(codex_utils_process::startup_args_os());
     // Determine if we were invoked via the special alias.
-    let mut args = std::env::args_os();
+    let mut args = codex_utils_process::startup_args_os();
     let argv0 = args.next().unwrap_or_default();
     let exe_name = Path::new(&argv0)
         .file_name()

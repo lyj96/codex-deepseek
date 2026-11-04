@@ -547,7 +547,7 @@ impl ConfigManager {
         // Resolve the selection before the saved provider is applied as a resume override.
         let current_config = self
             .load_latest_config(typesafe_overrides.cwd.clone().or_else(|| cwd.clone()))
-            .await;
+            .await?;
         let mut resume_provider = None;
         let config = self
             .load_with_validation(
@@ -588,8 +588,7 @@ impl ConfigManager {
                             ));
                         }
                     }
-                    let configured = current_config?;
-                    let admission = provider_admission::ProviderAdmission::new(&configured);
+                    let admission = provider_admission::ProviderAdmission::new(&current_config);
                     for provider in [
                         saved_provider.unwrap_or(requested_provider),
                         requested_provider,
@@ -615,7 +614,10 @@ impl ConfigManager {
                 &config.model_provider_id,
             ));
         }
-        self.check_thread_model_provider_for_input(&config).await?;
+        // Admit the materialized route against the same unoverridden selection used above.
+        // Reloading thread config a third time can mix two different session snapshots.
+        provider_admission::ProviderAdmission::new(&current_config).check_config(&config)?;
+        self.check_thread_model_provider(&config).await?;
         config.validate_windows_mxc_requirement()?;
         Ok(config)
     }

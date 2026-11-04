@@ -2,6 +2,17 @@
 
 V8SnapshotPlatformInfo = provider(fields = ["macos", "cpu"])
 
+def can_use_native_macos_tool(ctx):
+    """Reuse target-configured generators only on the same native Mac CPU."""
+    execution = ctx.attr._snapshot_execution_platform[V8SnapshotPlatformInfo]
+    if not execution.macos or not ctx.target_platform_has_constraint(ctx.attr._macos[platform_common.ConstraintValueInfo]):
+        return False
+    if ctx.target_platform_has_constraint(ctx.attr._arm64[platform_common.ConstraintValueInfo]):
+        return execution.cpu == "arm64"
+    if ctx.target_platform_has_constraint(ctx.attr._x64[platform_common.ConstraintValueInfo]):
+        return execution.cpu == "x64"
+    return False
+
 def _snapshot_platform_impl(ctx):
     cpu = ""
     if ctx.target_platform_has_constraint(ctx.attr._arm64[platform_common.ConstraintValueInfo]):

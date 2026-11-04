@@ -843,6 +843,7 @@ engine_repository(
         "//patches:v8_source_portability.patch",
         "//patches:v8_array_sort_elements_kind.patch",
         "//third_party/v8:v8_defs.patch",
+        "//third_party/v8:native_generator_reuse.patch",
     ],
     strip_prefix = "v8-15.2.124.1",
     urls = ["https://github.com/v8/v8/archive/refs/tags/15.2.124.1.tar.gz"],

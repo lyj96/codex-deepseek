@@ -259,11 +259,9 @@ impl StatusIndicator<'_> {
         } else {
             indicator_start
         };
-        if let Some(indicator) = activity_indicator(
-            indicator_start,
-            progress,
-            ReducedMotionIndicator::Hidden,
-        ) {
+        if let Some(indicator) =
+            activity_indicator(indicator_start, progress, ReducedMotionIndicator::Hidden)
+        {
             spans.push(indicator);
             spans.push(" ".into());
         }

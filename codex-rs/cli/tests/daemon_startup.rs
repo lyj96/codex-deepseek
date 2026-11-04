@@ -176,10 +176,18 @@ async fn daemon_startup(command: &str) -> Result<()> {
             .success(),
         "failed to prepare CLI test executable"
     );
+    // Startup policy tests use the shipped catalog, without depending on a live
+    // discovery endpoint accepting the fixture's deliberately fake credential.
+    let catalog_path = home.path().join("models.json");
+    fs::write(
+        &catalog_path,
+        serde_json::to_vec(&codex_models_manager::bundled_models_response()?)?,
+    )?;
     fs::write(
         home.path().join("config.toml"),
         format!(
             "model = \"gpt-5.6-terra\"\n\
+         model_catalog_json = {}\n\
          cli_auth_credentials_store = \"file\"\n\
          suppress_unstable_features_warning = true\nanalytics.enabled = false\n\
          windows.sandbox = \"unelevated\"\n\
@@ -187,6 +195,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
          {}\n\
          notice.model_migrations.\"gpt-5.6-terra\" = \"gpt-6-sol\"\n\
          [projects.{}]\ntrust_level = \"{}\"\n",
+            serde_json::to_string(&catalog_path)?,
             if command == "discovered" {
                 "tui.status_line=[\"model\",\"thread-id\",\"thread-name\"]\nfeatures.daemon_auto_start=false"
             } else {

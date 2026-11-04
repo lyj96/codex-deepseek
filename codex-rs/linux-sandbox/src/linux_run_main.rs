@@ -145,7 +145,7 @@ pub fn run_main() -> ! {
         no_proc,
         inherit_pid_namespace,
         command,
-    } = LinuxSandboxCommand::parse();
+    } = LinuxSandboxCommand::parse_from(codex_utils_process::startup_args_os());
     let allow_network_for_proxy = managed_network.is_some();
 
     if command.is_empty() {
@@ -497,7 +497,7 @@ fn apply_inner_command_argv0_for_launcher(
 }
 
 fn current_process_argv0() -> String {
-    match std::env::args_os().next() {
+    match codex_utils_process::startup_args_os().next() {
         Some(argv0) => argv0.to_string_lossy().into_owned(),
         None => panic!("failed to resolve current process argv[0]"),
     }

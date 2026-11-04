@@ -51,7 +51,7 @@ async fn workspace_roots_test(server: &MockServer) -> Result<TestCodex> {
                 .abs();
         }
         config.workspace_roots = vec![config.cwd.clone()];
-        config.set_windows_sandbox_enabled(/*value*/ true);
+        config.set_windows_elevated_sandbox_enabled(/*value*/ true);
     });
     builder.build_with_auto_env(server).await
 }
@@ -157,6 +157,9 @@ async fn workspace_roots_allow_file_and_command_writes() -> Result<()> {
         "Wine does not emulate Windows restricted-token and ACL sandbox semantics"
     );
 
+    #[cfg(windows)]
+    let _accounts = codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire()?;
+
     let server = start_mock_server().await;
     let test = workspace_roots_test(&server).await?;
     let cwd = PathUri::from_abs_path(&test.config.cwd);
@@ -213,6 +216,9 @@ async fn workspace_roots_allow_file_and_command_writes_in_secondary_root(
         "Wine does not emulate Windows restricted-token and ACL sandbox semantics"
     );
 
+    #[cfg(windows)]
+    let _accounts = codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire()?;
+
     let server = start_mock_server().await;
     let mut builder = test_codex()
         .with_config(move |config| {
@@ -235,7 +241,7 @@ async fn workspace_roots_allow_file_and_command_writes_in_secondary_root(
                 config.workspace_roots.push(secondary_root);
             }
             // Owner-provided sandbox settings must work independently of thread defaults.
-            config.set_windows_sandbox_enabled(!owner_resolved_roots);
+            config.set_windows_elevated_sandbox_enabled(!owner_resolved_roots);
         })
         .with_workspace_setup(|cwd, fs| async move {
             let secondary_root = cwd
@@ -278,7 +284,7 @@ async fn workspace_roots_allow_file_and_command_writes_in_secondary_root(
                         workspace_roots_profile(),
                     ),
                     shell_environment_policy: Default::default(),
-                    windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                    windows_sandbox_level: WindowsSandboxLevel::Elevated,
                     windows_sandbox_type: SandboxType::WindowsRestrictedToken,
                     use_legacy_landlock: test.config.features.use_legacy_landlock(),
                     exec_policy: None,
@@ -350,6 +356,9 @@ async fn workspace_roots_allow_patches_but_protect_metadata_directories() -> Res
         Ok(()),
         "Wine does not emulate Windows restricted-token and ACL sandbox semantics"
     );
+
+    #[cfg(windows)]
+    let _accounts = codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire()?;
 
     let server = start_mock_server().await;
     let test = workspace_roots_test(&server).await?;
@@ -443,6 +452,9 @@ async fn workspace_roots_deny_file_and_command_writes_outside_roots() -> Result<
         Ok(()),
         "Wine does not emulate Windows restricted-token and ACL sandbox semantics"
     );
+
+    #[cfg(windows)]
+    let _accounts = codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire()?;
 
     let server = start_mock_server().await;
     let test = workspace_roots_test(&server).await?;
