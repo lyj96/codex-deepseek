@@ -421,7 +421,11 @@ impl Session {
             done_clone.notify_waiters();
         }
         .instrument(task_span);
-        let handle = tokio::spawn(storage_originator.scope(task_future).with_current_subscriber());
+        let handle = tokio::spawn(
+            storage_originator
+                .scope(task_future)
+                .with_current_subscriber(),
+        );
         let timer = turn_context
             .session_telemetry
             .start_timer(TURN_E2E_DURATION_METRIC, &[])

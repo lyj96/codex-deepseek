@@ -319,11 +319,9 @@ async fn file_system_no_follow_metadata_preserves_linux_birthtime(
                 rustix::fs::AtFlags::empty(),
                 rustix::fs::StatxFlags::BTIME,
             ) {
-                Ok(stat) if stat.stx_mask & rustix::fs::StatxFlags::BTIME.bits() != 0 => {
-                    Some(
-                        stat.stx_btime.tv_sec * 1_000 + i64::from(stat.stx_btime.tv_nsec / 1_000_000),
-                    )
-                }
+                Ok(stat) if stat.stx_mask & rustix::fs::StatxFlags::BTIME.bits() != 0 => Some(
+                    stat.stx_btime.tv_sec * 1_000 + i64::from(stat.stx_btime.tv_nsec / 1_000_000),
+                ),
                 Ok(_) => None,
                 Err(error)
                     if error == rustix::io::Errno::NOSYS || error == rustix::io::Errno::PERM =>

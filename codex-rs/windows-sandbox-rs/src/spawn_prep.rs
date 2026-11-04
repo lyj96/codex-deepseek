@@ -120,8 +120,7 @@ pub(crate) fn prepare_spawn_context_common(
     })
 }
 
-pub(crate) const LEGACY_BACKEND_UNSUPPORTED: &str =
-    "The legacy Windows sandbox backend cannot enforce deletion isolation; use the elevated Windows sandbox backend after completing its setup";
+pub(crate) const LEGACY_BACKEND_UNSUPPORTED: &str = "The legacy Windows sandbox backend cannot enforce deletion isolation; use the elevated Windows sandbox backend after completing its setup";
 
 pub(crate) fn reject_legacy_backend() -> Result<()> {
     anyhow::bail!(LEGACY_BACKEND_UNSUPPORTED)

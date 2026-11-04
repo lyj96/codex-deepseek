@@ -197,7 +197,9 @@ impl PsuedoCon {
         // client; registered control handlers remain installed.
         // A detached GUI/stdio launcher has no console handler table to reset.
         if unsafe { GetConsoleCP() } != 0
-            && unsafe { SetConsoleCtrlHandler(None, /*Add*/ 0) } == 0
+            && unsafe {
+                SetConsoleCtrlHandler(None, /*Add*/ 0)
+            } == 0
         {
             let error = IoError::last_os_error();
             bail!("failed to enable Ctrl-C for ConPTY clients: {error}");

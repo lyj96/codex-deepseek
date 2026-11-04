@@ -110,6 +110,7 @@ def _bash_runfile_env_exports(ctx):
 
 def _windows_runfile_env_exports(ctx):
     lines = []
+
     # Only explicitly declared, pinned runtime libraries enter this test's PATH.
     # Resolve their runfiles first so manifest-only Windows runs also work.
     dll_directories = {}

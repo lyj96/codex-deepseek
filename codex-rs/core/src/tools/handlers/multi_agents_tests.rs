@@ -3067,7 +3067,8 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
     let (mut session, mut turn) = make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(server.uri());
-    turn.provider = create_model_provider(config.model_provider.clone(), /*auth_manager*/ None);
+    turn.provider =
+        create_model_provider(config.model_provider.clone(), /*auth_manager*/ None);
     let manager = ThreadManager::with_models_provider_for_tests(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),

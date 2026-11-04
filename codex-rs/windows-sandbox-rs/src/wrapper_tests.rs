@@ -167,10 +167,7 @@ fn windows_wrapper_args_round_trip() {
     assert_eq!(parsed.workspace_roots, workspace_roots);
     assert_eq!(parsed.env_map, env);
     assert_eq!(parsed.permission_profile, permission_profile);
-    assert_eq!(
-        parsed.windows_sandbox_level,
-        WindowsSandboxLevel::Elevated
-    );
+    assert_eq!(parsed.windows_sandbox_level, WindowsSandboxLevel::Elevated);
     let desktop = crate::desktop::LaunchDesktop::open_private(&parsed.private_desktop_name)
         .expect("wrapper must receive a live private desktop");
     drop(desktop);

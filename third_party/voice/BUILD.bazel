@@ -356,12 +356,12 @@ label_flag(
 [
     config_setting(
         name = "windows_" + cpu + "_msvc",
-        visibility = ["//codex-rs/voice-host:__pkg__"],
         constraint_values = [
             "@platforms//os:windows",
             "@platforms//cpu:" + cpu,
             "@llvm//constraints/windows/abi:msvc",
         ],
+        visibility = ["//codex-rs/voice-host:__pkg__"],
     )
     for cpu in ("x86_64", "aarch64")
 ]

@@ -1262,7 +1262,8 @@ fn elevated_tty_job_terminates_and_preserves_descendants() {
     current_thread_runtime().block_on(async move {
         assert_elevated_tty_descendant_lifecycle(&pwsh, ElevatedTtyDescendantLifecycle::Terminate)
             .await;
-        assert_elevated_tty_descendant_lifecycle(&pwsh, ElevatedTtyDescendantLifecycle::Preserve).await;
+        assert_elevated_tty_descendant_lifecycle(&pwsh, ElevatedTtyDescendantLifecycle::Preserve)
+            .await;
     });
 }
 

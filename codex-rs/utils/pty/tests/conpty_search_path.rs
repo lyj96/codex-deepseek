@@ -54,9 +54,10 @@ fn conpty_ignores_dll_in_current_directory() -> anyhow::Result<()> {
     {
         let _current_dir = CurrentDirGuard::enter(&temp_dir)
             .context("enter ConPTY search-path fixture directory")?;
-        let (console, input_write, mut output_read) = RawConPty::new(/*cols*/ 80, /*rows*/ 24)
-            .context("create ConPTY search-path fixture console")?
-            .into_handles();
+        let (console, input_write, mut output_read) =
+            RawConPty::new(/*cols*/ 80, /*rows*/ 24)
+                .context("create ConPTY search-path fixture console")?
+                .into_handles();
         // On Windows build 26100+, closing the console returns before teardown.
         // Drain concurrently for older Windows too, where close can block on output.
         let output_drain = std::thread::spawn(move || {
