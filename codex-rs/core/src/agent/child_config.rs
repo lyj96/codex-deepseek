@@ -80,7 +80,9 @@ pub(crate) async fn prepare_agent_spawn_config(
             role_applied = true;
         }
         routed_model = Some(
-            match apply_external_model_route(&mut config, requested_model)? {
+            match apply_external_model_route(&mut config, requested_model)
+                .map_err(|error| error.to_string())?
+            {
                 ExternalModelRoute::Applied { model, .. } => model,
                 ExternalModelRoute::NotMatched if options.role_name.is_some() => {
                     requested_model.to_string()

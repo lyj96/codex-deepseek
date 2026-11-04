@@ -125,6 +125,38 @@ def main():
                     + ", ".join(name for name, valid in checks.items() if not valid),
                     file=sys.stderr,
                 )
+                # Identify missing or malformed workspace stamping without
+                # exposing arbitrary values from the build environment.
+                status_bytes = (root / config["status"]).read_bytes()
+                known_keys = (
+                    "BUILD_EMBED_LABEL",
+                    "BUILD_HOST",
+                    "BUILD_USER",
+                    "STABLE_GIT_COMMIT",
+                )
+                status_lines = status_bytes.decode(
+                    "utf-8", errors="replace"
+                ).splitlines()
+                key_counts = {}
+                for key in known_keys:
+                    prefix = key + " "
+                    key_counts[key] = sum(
+                        line.startswith(prefix) for line in status_lines
+                    )
+                print(
+                    "Workspace status diagnostics: "
+                    + json.dumps(
+                        {
+                            "bytes": len(status_bytes),
+                            "sha256": hashlib.sha256(status_bytes).hexdigest(),
+                            "utf8_bom": status_bytes.startswith(b"\xef\xbb\xbf"),
+                            "line_count": len(status_lines),
+                            "known_key_counts": key_counts,
+                        },
+                        sort_keys=True,
+                    ),
+                    file=sys.stderr,
+                )
                 raise
             return
         if operation != "build":

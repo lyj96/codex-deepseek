@@ -135,9 +135,10 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 24
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+          node-version-file: .nvmrc
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # pinned action; toolchain from stable below
         with:
+          toolchain: "1.95.0"
           targets: ${{ matrix.target }}
       - name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8
@@ -256,7 +257,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: codex-deepseek-*
@@ -316,7 +317,7 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
       - name: Use OIDC-capable npm

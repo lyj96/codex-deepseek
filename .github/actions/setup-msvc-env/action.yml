@@ -14,6 +14,7 @@ runs:
   steps:
     - name: Expose MSVC SDK environment
       shell: pwsh
+      working-directory: ${{ github.workspace }}/codex-rs
       env:
         HOST_ARCH: ${{ inputs.host-arch }}
         TARGET: ${{ inputs.target }}

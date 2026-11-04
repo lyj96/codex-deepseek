@@ -77,6 +77,14 @@ impl AgentControl for LocalAgentControl {
                             "spawn input must start the child turn".to_string(),
                         ));
                     }
+                    if matches!(message, AgentMessage::Encrypted(_))
+                        && config.model_provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID
+                    {
+                        return Err(CodexErr::UnsupportedOperation(
+                            "OpenAI encrypted agent messages cannot be sent to an external provider; use spawn_external_agent with plaintext"
+                                .to_string(),
+                        ));
+                    }
                     let recipient = source.get_agent_path().ok_or_else(|| {
                         CodexErr::InvalidRequest(
                             "spawned agent is missing a canonical task name".to_string(),

@@ -6,11 +6,13 @@ use codex_extension_api::MessageLifecycleContributor;
 use codex_extension_api::MessageLifecycleInput;
 use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
 use serde::Deserialize;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -56,16 +58,26 @@ impl AgentCommunicationContext {
     }
 }
 
-pub(crate) fn logging_enabled() -> bool {
-    tracing::enabled!(target: AGENT_COMMUNICATION_TARGET, tracing::Level::INFO)
+pub(crate) fn send_log_content(
+    communication: &InterAgentCommunication,
+) -> Option<Cow<'static, str>> {
+    tracing::enabled!(target: AGENT_COMMUNICATION_TARGET, tracing::Level::INFO).then(|| {
+        match &communication.encrypted_content {
+            Some(content) => Cow::Owned(content.clone()),
+            None => Cow::Borrowed("[plaintext]"),
+        }
+    })
 }
 
 pub(crate) fn emit_agent_communication_send(
     communication_id: &str,
     context: &AgentCommunicationContext,
-    communication: &InterAgentCommunication,
+    log_content: Option<&str>,
     receiver_thread_id: ThreadId,
 ) {
+    let Some(content) = log_content else {
+        return;
+    };
     tracing::info!(
         target: AGENT_COMMUNICATION_TARGET,
         {
@@ -75,10 +87,7 @@ pub(crate) fn emit_agent_communication_send(
             state = "send",
             sender_thread_id = %context.sender_thread_id,
             receiver_thread_id = %receiver_thread_id,
-            content = communication
-                .encrypted_content
-                .as_deref()
-                .unwrap_or("[plaintext]"),
+            content,
         },
         "agent communication"
     );
@@ -96,10 +105,8 @@ pub(crate) fn emit_agent_communication_receive(communication_id: &str) {
     );
 }
 
-/// Converts a queued inter-agent communication into input accepted by the recipient provider.
-/// OpenAI understands the richer `agent_message` item, including encrypted payloads. Other
-/// Responses-compatible providers receive an ordinary user message and never see opaque OpenAI
-/// encrypted content.
+/// Preserve canonical mail identity in history while excluding foreign encrypted payloads.
+/// Provider-specific wire projection happens on the request copy, after replay and deduplication.
 pub(crate) fn model_input_item_for_provider(
     communication: &InterAgentCommunication,
     recipient_provider_id: &str,
@@ -121,7 +128,34 @@ pub(crate) fn model_input_item_for_provider(
     } else {
         communication.content.clone()
     };
-    ResponseItem::Message {
+    ResponseItem::AgentMessage {
+        id: communication.id.clone(),
+        author: communication.author.to_string(),
+        recipient: communication.recipient.to_string(),
+        content: vec![AgentMessageInputContent::InputText { text }],
+        internal_chat_message_metadata_passthrough: communication
+            .internal_chat_message_metadata_passthrough
+            .clone(),
+    }
+}
+
+/// Project only the wire copy; external providers never receive OpenAI agent-message payloads.
+pub(crate) fn project_agent_message_for_external_provider(item: &mut ResponseItem) {
+    let ResponseItem::AgentMessage {
+        author,
+        recipient,
+        content,
+        ..
+    } = item
+    else {
+        return;
+    };
+    let text = codex_protocol::models::plaintext_agent_message_content(content).unwrap_or_else(|| {
+        format!(
+            "Task name: {recipient}\nSender: {author}\nPayload:\n[Unavailable encrypted cross-provider payload]"
+        )
+    });
+    *item = ResponseItem::Message {
         encrypted_content: None,
         status: None,
         id: None,
@@ -129,14 +163,13 @@ pub(crate) fn model_input_item_for_provider(
         content: vec![ContentItem::InputText { text }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
-    }
+    };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use codex_protocol::AgentPath;
-    use codex_protocol::models::AgentMessageInputContent;
 
     fn plaintext_communication() -> InterAgentCommunication {
         InterAgentCommunication::new(
@@ -151,7 +184,9 @@ mod tests {
 
     #[test]
     fn external_provider_receives_standard_user_message() {
-        let item = model_input_item_for_provider(&plaintext_communication(), "deepseek");
+        let mut item = model_input_item_for_provider(&plaintext_communication(), "deepseek");
+        assert!(matches!(item, ResponseItem::AgentMessage { .. }));
+        project_agent_message_for_external_provider(&mut item);
         assert!(matches!(
             item,
             ResponseItem::Message {

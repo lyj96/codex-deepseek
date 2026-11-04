@@ -7,6 +7,7 @@
 
 use crate::config::Config;
 use crate::config::ConfiguredExternalModel;
+use crate::config::ModelProviderRequirementError;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use serde::Deserialize;
@@ -15,6 +16,33 @@ use std::path::PathBuf;
 
 const EXTERNAL_MODEL_CATALOGS_DIR: &str = "model-catalogs";
 const EXTERNAL_MODEL_ROUTES_FILE: &str = "routes.json";
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ExternalModelRouteError {
+    #[error("{0}")]
+    Configuration(String),
+    #[error(transparent)]
+    RequiredProvider(#[from] ModelProviderRequirementError),
+}
+
+impl From<String> for ExternalModelRouteError {
+    fn from(message: String) -> Self {
+        Self::Configuration(message)
+    }
+}
+
+impl ExternalModelRouteError {
+    pub(crate) fn into_io(self) -> std::io::Error {
+        match self {
+            Self::Configuration(message) => {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+            }
+            Self::RequiredProvider(conflict) => {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, conflict)
+            }
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct ExternalModelRoutes {
@@ -44,7 +72,7 @@ pub(crate) enum ExternalModelRoute {
 pub(crate) fn apply_external_model_route(
     config: &mut Config,
     requested_model: &str,
-) -> Result<ExternalModelRoute, String> {
+) -> Result<ExternalModelRoute, ExternalModelRouteError> {
     let explicit_route = load_external_model_routes(config)?
         .and_then(|routes| routes.models.get(requested_model).cloned());
     let (provider_id, api_model) = if let Some(route) = explicit_route {
@@ -60,6 +88,16 @@ pub(crate) fn apply_external_model_route(
     } else {
         return Ok(ExternalModelRoute::NotMatched);
     };
+
+    if let Some(required) = config.config_layer_stack.required_model_provider()
+        && required != provider_id
+    {
+        return Err(ModelProviderRequirementError {
+            model_provider: provider_id,
+            required_model_provider: required.to_owned(),
+        }
+        .into());
+    }
 
     if config.model_provider_id == provider_id {
         apply_external_provider_catalog(config, &provider_id)?;
@@ -351,3 +389,7 @@ fn external_provider_catalog_path(config: &Config, provider_id: &str) -> Option<
             .join(format!("{provider_id}.json"))
     })
 }
+
+#[cfg(test)]
+#[path = "external_model_route_policy_tests.rs"]
+mod policy_tests;

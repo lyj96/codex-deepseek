@@ -1,9 +1,11 @@
+use codex_app_server_protocol::ModelProviderError;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::cloud_config_bundle_loader;
+use codex_cloud_config::managed_config_bundle_loader;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
+use codex_config::apply_default_gcp_auth;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::load_managed_requirements_state;
 use codex_core::config::Config;
@@ -15,6 +17,8 @@ use codex_login::AuthManager;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
+use codex_model_provider_info::GCP_PROVIDER_ID;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -35,11 +39,8 @@ use tracing::warn;
 #[path = "application_network.rs"]
 pub(crate) mod application_network;
 
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Your organization's required model provider settings changed. Restart Codex to apply them; this request was not sent"
-)]
-pub(crate) struct ModelProviderRequirementsChanged;
+#[path = "provider_admission.rs"]
+mod provider_admission;
 
 /// Shared app-server entry point for loading effective Codex configuration.
 #[derive(Clone)]
@@ -172,7 +173,7 @@ impl ConfigManager {
             .unwrap_or_default()
     }
 
-    pub(crate) fn current_cloud_config_bundle(&self) -> CloudConfigBundleLoader {
+    pub(crate) fn current_managed_config_loader(&self) -> CloudConfigBundleLoader {
         self.cloud_config_bundle
             .read()
             .map(|guard| guard.clone())
@@ -189,27 +190,29 @@ impl ConfigManager {
         Ok(())
     }
 
-    pub(crate) fn replace_cloud_config_bundle_loader(
+    pub(crate) fn update_managed_config_loader(
         &self,
         auth_manager: Arc<AuthManager>,
-        chatgpt_base_url: String,
-        http_client_factory: codex_http_client::HttpClientFactory,
+        config: &Config,
     ) {
-        let endpoint = codex_backend_client::Client::new(
-            chatgpt_base_url.clone(),
-            http_client_factory.clone(),
-        )
-        .config_bundle_url();
-        let http_client_factory = http_client_factory.with_network_policy(
-            self.local_network_policy
-                .policy()
-                .restrict_to_endpoints(endpoint.parse().into_iter().collect()),
-        );
-        let loader = cloud_config_bundle_loader(
+        // Keep config-server settings and their refresh worker when only
+        // ChatGPT/API-key credentials change.
+        if self
+            .current_managed_config_loader()
+            .config_server()
+            .is_some()
+        {
+            self.revoke_mcp_ema();
+            return;
+        }
+        let loader = managed_config_bundle_loader(
             auth_manager,
-            chatgpt_base_url,
+            config.chatgpt_base_url.clone(),
             self.codex_home.clone(),
-            http_client_factory,
+            config
+                .http_client_factory()
+                .with_network_policy(self.local_network_policy.policy()),
+            config.config_layer_stack.requirements_toml(),
         );
         if let Ok(mut guard) = self.cloud_config_bundle.write() {
             guard.retire_ema_policy();
@@ -220,10 +223,12 @@ impl ConfigManager {
         self.revoke_mcp_ema();
     }
 
-    pub(crate) fn clear_cloud_config_bundle_loader(&self) {
+    pub(crate) fn clear_chatgpt_config_loader(&self) {
         if let Ok(mut guard) = self.cloud_config_bundle.write() {
-            guard.retire_ema_policy();
-            *guard = CloudConfigBundleLoader::default();
+            if guard.config_server().is_none() {
+                guard.retire_ema_policy();
+                *guard = CloudConfigBundleLoader::default();
+            }
         } else {
             warn!("failed to clear cloud config bundle loader");
         }
@@ -371,16 +376,26 @@ impl ConfigManager {
             Some(provider)
                 if matches!(
                     current.model_provider_id.as_str(),
-                    AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+                    AMAZON_BEDROCK_PROVIDER_ID
+                        | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+                        | GCP_PROVIDER_ID
+                        | OPENAI_PROVIDER_ID
                 ) =>
             {
-                // Bedrock requirements contain overrides of the built-in provider.
-                merge_configured_model_providers(
-                    built_in_model_providers(/*openai_base_url*/ None),
+                // Managed overrides must receive the same built-in defaults as startup config.
+                // OpenAI's inference URL belongs to the retained session, not the catalog override.
+                let mut provider = merge_configured_model_providers(
+                    built_in_model_providers(current.model_provider.base_url.clone()),
                     HashMap::from([(current.model_provider_id.clone(), provider)]),
                 )
                 .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?
-                .remove(&current.model_provider_id)
+                .remove(&current.model_provider_id);
+                if current.model_provider_id == GCP_PROVIDER_ID
+                    && let Some(provider) = provider.as_mut()
+                {
+                    apply_default_gcp_auth(provider, &current.cwd);
+                }
+                provider
             }
             Some(provider) => Some(provider),
             None => None,
@@ -391,7 +406,12 @@ impl ConfigManager {
         if selection_changed || definition_changed {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
-                ModelProviderRequirementsChanged,
+                ModelProviderError::ModelProviderPolicyConflict {
+                    model_provider: current.model_provider_id.clone(),
+                    required_model_provider: requirements
+                        .model_provider
+                        .unwrap_or_else(|| current.model_provider_id.clone()),
+                },
             ));
         }
         Ok(())
@@ -399,7 +419,7 @@ impl ConfigManager {
 
     /// Load local policy before auth, then fetch the account's cloud configuration.
     /// Callers choose their error/recovery policy before initializing any runtimes.
-    pub(crate) async fn load_cloud_startup_config(
+    pub(crate) async fn load_managed_startup_config(
         &self,
         cwd: Option<PathBuf>,
     ) -> std::io::Result<CloudStartupConfig> {
@@ -408,13 +428,21 @@ impl ConfigManager {
             AuthManager::shared_from_config(&bootstrap, /*enable_codex_api_key_env*/ false)
                 .await
                 .map_err(std::io::Error::other)?;
-        self.replace_cloud_config_bundle_loader(
-            auth,
-            bootstrap.chatgpt_base_url.clone(),
-            bootstrap.http_client_factory(),
-        );
+        self.update_managed_config_loader(auth, &bootstrap);
         let config = self.load_latest_config(cwd).await;
         Ok(CloudStartupConfig { bootstrap, config })
+    }
+
+    /// Admits the current selection and configured catalog routes without replacing thread identity.
+    pub(crate) async fn check_thread_model_provider_for_input(
+        &self,
+        current: &Config,
+    ) -> std::io::Result<()> {
+        self.check_thread_model_provider(current).await?;
+        let configured = self
+            .load_latest_config(Some(current.cwd.to_path_buf()))
+            .await?;
+        provider_admission::ProviderAdmission::new(&configured).check_config(current)
     }
 
     /// Installs local policy before cloud access; failed policy loads block traffic while
@@ -501,6 +529,99 @@ impl ConfigManager {
         })
     }
 
+    /// Validates saved and requested providers before resume overrides or policy can replace them.
+    pub(crate) async fn load_for_resume(
+        &self,
+        saved_provider: Option<&str>,
+        request_overrides: Option<HashMap<String, serde_json::Value>>,
+        typesafe_overrides: ConfigOverrides,
+        cwd: Option<PathBuf>,
+    ) -> std::io::Result<Config> {
+        let requested_provider = typesafe_overrides.model_provider.clone().or_else(|| {
+            request_overrides
+                .as_ref()
+                .and_then(|values| values.get("model_provider"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
+        // Resolve the selection before the saved provider is applied as a resume override.
+        let current_config = self
+            .load_latest_config(typesafe_overrides.cwd.clone().or_else(|| cwd.clone()))
+            .await?;
+        let mut resume_provider = None;
+        let config = self
+            .load_with_validation(
+                &self.current_cli_overrides(),
+                request_overrides,
+                typesafe_overrides,
+                cwd,
+                |config, _overrides, layers| {
+                    let requested_provider = requested_provider
+                        .as_deref()
+                        .or(config.model_provider.as_deref())
+                        .unwrap_or("openai");
+                    // Validate the saved route even when a client sends a provider override.
+                    for provider in [
+                        saved_provider.unwrap_or(requested_provider),
+                        requested_provider,
+                    ] {
+                        if let Some(required) = layers.required_model_provider()
+                            && required != provider
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                ModelProviderError::ModelProviderPolicyConflict {
+                                    model_provider: provider.to_owned(),
+                                    required_model_provider: required.to_owned(),
+                                },
+                            ));
+                        }
+                        if !config.model_providers.contains_key(provider)
+                            && !built_in_model_providers(config.openai_base_url.clone())
+                                .contains_key(provider)
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                ModelProviderError::ModelProviderNotConfigured {
+                                    model_provider: provider.to_owned(),
+                                },
+                            ));
+                        }
+                    }
+                    let admission = provider_admission::ProviderAdmission::new(&current_config);
+                    for provider in [
+                        saved_provider.unwrap_or(requested_provider),
+                        requested_provider,
+                    ] {
+                        admission.check_selection(provider)?;
+                    }
+                    let retained = saved_provider.unwrap_or(requested_provider);
+                    if retained != requested_provider {
+                        return Err(provider_admission::mismatch(retained, requested_provider));
+                    }
+                    resume_provider = Some(retained.to_owned());
+                    Ok(())
+                },
+            )
+            .await?;
+        let retained = resume_provider
+            .ok_or_else(|| std::io::Error::other("resume provider validation did not run"))?;
+        // Public model routing runs after raw provider validation. Recheck the actual route
+        // before a resumed history or an inference client can be initialized.
+        if config.model_provider_id != retained {
+            return Err(provider_admission::mismatch(
+                &retained,
+                &config.model_provider_id,
+            ));
+        }
+        // Admit the materialized route against the same unoverridden selection used above.
+        // Reloading thread config a third time can mix two different session snapshots.
+        provider_admission::ProviderAdmission::new(&current_config).check_config(&config)?;
+        self.check_thread_model_provider(&config).await?;
+        config.validate_windows_mxc_requirement()?;
+        Ok(config)
+    }
+
     /// Reload sources using the task's session flags before materializing config.
     pub(crate) async fn load_permission_config_for_thread(
         &self,
@@ -548,8 +669,30 @@ impl ConfigManager {
         &self,
         cli_overrides: &[(String, TomlValue)],
         request_overrides: Option<HashMap<String, serde_json::Value>>,
+        typesafe_overrides: ConfigOverrides,
+        fallback_cwd: Option<PathBuf>,
+    ) -> std::io::Result<Config> {
+        self.load_with_validation(
+            cli_overrides,
+            request_overrides,
+            typesafe_overrides,
+            fallback_cwd,
+            |_, _, _| Ok(()),
+        )
+        .await
+    }
+
+    async fn load_with_validation(
+        &self,
+        cli_overrides: &[(String, TomlValue)],
+        request_overrides: Option<HashMap<String, serde_json::Value>>,
         mut typesafe_overrides: ConfigOverrides,
         fallback_cwd: Option<PathBuf>,
+        validate: impl FnOnce(
+            &codex_config::config_toml::ConfigToml,
+            &ConfigOverrides,
+            &ConfigLayerStack,
+        ) -> std::io::Result<()>,
     ) -> std::io::Result<Config> {
         let mcp_ema_cancellation = self.capture_mcp_ema_cancellation();
         let policy_load = self.refresh_application_network_policy().await?;
@@ -580,9 +723,9 @@ impl ConfigManager {
             .fallback_cwd(fallback_cwd)
             .cloud_config_bundle(policy_load.cloud_config.clone())
             .thread_config_loader(Arc::clone(&self.thread_config_loader))
-            .build()
+            .build_with_validation(validate)
             .await;
-        let mut config = result?;
+        let mut config = result.map_err(provider_admission::map_config_error)?;
         self.check_application_policy_load(&policy_load)?;
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config);
@@ -691,6 +834,10 @@ mod application_network_tests;
 #[cfg(test)]
 #[path = "config_manager_provider_tests.rs"]
 mod provider_tests;
+
+#[cfg(test)]
+#[path = "config_manager_catalog_provider_tests.rs"]
+mod catalog_provider_tests;
 
 pub(crate) fn protected_feature_keys(config_layer_stack: &ConfigLayerStack) -> BTreeSet<String> {
     let mut protected_features = config_layer_stack

@@ -310,7 +310,27 @@ async fn file_system_no_follow_metadata_preserves_linux_birthtime(
         Ok(created) => Some(i64::try_from(
             created.duration_since(UNIX_EPOCH)?.as_millis(),
         )?),
-        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => None,
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+            // musl's std metadata can omit birthtime even when the kernel exposes it.
+            // Check the kernel value independently of the executor's no-follow traversal.
+            match rustix::fs::statx(
+                rustix::fs::CWD,
+                &file,
+                rustix::fs::AtFlags::empty(),
+                rustix::fs::StatxFlags::BTIME,
+            ) {
+                Ok(stat) if stat.stx_mask & rustix::fs::StatxFlags::BTIME.bits() != 0 => Some(
+                    stat.stx_btime.tv_sec * 1_000 + i64::from(stat.stx_btime.tv_nsec / 1_000_000),
+                ),
+                Ok(_) => None,
+                Err(error)
+                    if error == rustix::io::Errno::NOSYS || error == rustix::io::Errno::PERM =>
+                {
+                    None
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
         Err(error) => return Err(error.into()),
     };
 

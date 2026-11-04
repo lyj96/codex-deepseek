@@ -788,7 +788,6 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         }
         return Ok(false);
     }
-    let mut added = false;
     // Always ensure write is present: if an allow ACE exists without write, add one with write+RX.
     let trustee = TRUSTEE_W {
         pMultipleTrustee: std::ptr::null_mut(),
@@ -804,7 +803,9 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     explicit.Trustee = trustee;
     let mut p_new_dacl: *mut ACL = std::ptr::null_mut();
     let code2 = SetEntriesInAclW(1, &explicit, p_dacl, &mut p_new_dacl);
-    if code2 == ERROR_SUCCESS {
+    let result = if let Err(err) = acl_api_result(path, "SetEntriesInAclW", code2) {
+        Err(err)
+    } else {
         let code3 = SetNamedSecurityInfoW(
             to_wide(path).as_ptr() as *mut u16,
             1,
@@ -814,17 +815,15 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
             p_new_dacl,
             std::ptr::null_mut(),
         );
-        if code3 == ERROR_SUCCESS {
-            added = !dacl_has_write_allow_for_sid(p_dacl, psid);
-        }
-        if !p_new_dacl.is_null() {
-            LocalFree(p_new_dacl as HLOCAL);
-        }
+        acl_api_result(path, "SetNamedSecurityInfoW", code3).map(|()| true)
+    };
+    if !p_new_dacl.is_null() {
+        LocalFree(p_new_dacl as HLOCAL);
     }
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
-    Ok(added)
+    result
 }
 
 /// Adds a deny ACE to prevent write/append/delete for the given SID on the target path.

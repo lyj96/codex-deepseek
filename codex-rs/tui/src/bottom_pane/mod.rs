@@ -266,10 +266,10 @@ pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::ClipboardPasteTarget;
 pub(crate) use chat_composer::ComposerDraftSnapshot;
 pub(crate) use chat_composer::InputResult;
+pub(crate) use chat_composer::KillBufferSnapshot;
 pub(crate) use chat_composer::QueuedInputAction;
 pub(crate) use chat_composer::RestrictedInputMode;
 pub(crate) use chat_composer_history::HistoryEntry;
-pub(crate) use textarea::KillBufferSnapshot;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -486,9 +486,13 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_agents_navigation_enabled(&mut self, enabled: bool) {
-        self.composer.set_agents_navigation_enabled(enabled);
+    pub(crate) fn set_command_center_enabled(&mut self, enabled: bool) {
+        self.composer.command_center_enabled = enabled;
         self.request_redraw();
+    }
+
+    pub(crate) fn command_center_enabled(&self) -> bool {
+        self.composer.command_center_enabled
     }
 
     pub(crate) fn agents_navigation_key_available(&self) -> bool {
@@ -721,6 +725,17 @@ impl BottomPane {
 
     pub(crate) fn reset_status_timer(&mut self, elapsed: Duration) {
         self.status_timer.reset(elapsed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn freeze_status_for_snapshot(&mut self) {
+        let now = Instant::now();
+        self.status_timer.reset(Duration::ZERO);
+        self.status_timer.display_started_at = None;
+        self.status
+            .as_mut()
+            .expect("snapshot requires an active status row")
+            .freeze_for_snapshot(now);
     }
 
     pub(crate) fn set_status_timer_origin(&mut self, started_at: Option<Instant>) {

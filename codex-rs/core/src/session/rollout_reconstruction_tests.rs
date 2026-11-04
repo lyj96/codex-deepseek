@@ -75,8 +75,14 @@ fn reconstruct_rollout_uses_recipient_projection_without_changing_sender_evidenc
         } else {
             communication.content
         };
+        assert!(matches!(
+            projected.history[0].item,
+            ResponseItem::AgentMessage { .. }
+        ));
+        let mut wire_item = projected.history[0].item.clone();
+        crate::agent_communication::project_agent_message_for_external_provider(&mut wire_item);
         assert_eq!(
-            serde_json::to_value(&projected.history[0].item).unwrap(),
+            serde_json::to_value(&wire_item).unwrap(),
             json!({
                 "type": "message",
                 "role": "user",
@@ -1696,6 +1702,7 @@ async fn bounded_replay_matches_full_replay_after_empty_turn_compactions(
                     compaction_response_id: None,
                     latest_token_usage_record: None,
                     resume_metadata: current.then(|| codex_history::CompactionResumeMetadata {
+                        dynamic_tools: None,
                         multi_agent_version: None,
                         last_started_turn_id: Some(format!("wake-{window_number}")),
                         turn_attribution: None,

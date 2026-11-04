@@ -23,6 +23,14 @@ download URL. The latest PR revision must also pass `blocking-ci`. If either
 platform preflight or the PR gate fails, fix it before tagging; a release build
 must not be used as the first platform-specific compilation test.
 
+The 0.166.0 package adds `codex-exec-server`. Its native preflight must cover six
+Windows binaries (CLI, app-server, code-mode host, standalone executor, command
+runner and sandbox setup) and four Unix binaries (the first four of that list).
+Build and launch the CLI and standalone executor, plus Linux bubblewrap, before
+tagging. Use the stable repository's Rust 1.95.0 and Node `.nvmrc` pins. Host-reserved
+child creation and provider resume/input admission require focused native and
+external-provider regressions; a conflict-free merge does not establish them.
+
 `extended-ci` is manually dispatched on a reviewed ref. It preserves the full
 Bazel matrix, Clippy, SDK integration tests and argument-comment lint. These
 are supplemental signals, not prerequisites for ordinary Cargo releases.

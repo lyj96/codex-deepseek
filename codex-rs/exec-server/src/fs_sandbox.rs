@@ -116,6 +116,27 @@ impl FileSystemSandboxRunner {
             .permissions
             .clone()
             .materialize_project_roots_with_workspace_roots(workspace_roots);
+        #[cfg(windows)]
+        if sandbox.windows_sandbox_selection
+            == codex_file_system::WindowsSandboxSelection::RestrictedToken
+        {
+            // Reject an unsupported caller policy before adding helper runtime
+            // paths and probing their Windows aliases. Runtime permissions must
+            // not turn an unsupported read restriction into an accepted policy.
+            // The final transformed profile is still checked again below.
+            let caller_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+                native_permissions.enforcement(),
+                &native_permissions.file_system_sandbox_policy(),
+                NetworkSandboxPolicy::Restricted,
+            );
+            codex_sandboxing::resolve_windows_restricted_token_filesystem_overrides(
+                SandboxType::WindowsRestrictedToken,
+                &caller_profile,
+                &cwd.native,
+                WindowsSandboxLevel::RestrictedToken,
+            )
+            .map_err(|err| invalid_request(format!("failed to prepare fs sandbox: {err}")))?;
+        }
         let mut file_system_policy = native_permissions.file_system_sandbox_policy();
         tracing::Span::current().record("permission_entries", file_system_policy.entries.len());
         let helper_read_roots = if sandbox.use_legacy_landlock {

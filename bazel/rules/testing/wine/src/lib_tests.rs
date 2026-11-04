@@ -24,16 +24,19 @@ use super::WineRuntimePaths;
 use super::WineTestCommand;
 use super::WineTestProcess;
 use super::install_powershell_runtime;
+use super::log_wine_lifecycle;
 
 async fn waiting_smoke_process() -> Result<WineTestProcess> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
     let mut process = WineTestCommand::new(executable).arg("--wait").spawn()?;
     let mut lines = BufReader::new(process.take_stdout()).lines();
+    log_wine_lifecycle(format_args!("waiting for smoke readiness"));
     let ready_line = lines
         .next_line()
         .await?
         .context("Windows smoke process exited before becoming ready")?;
     assert_eq!(ready_line, "WINE_TEST_READY");
+    log_wine_lifecycle(format_args!("smoke readiness observed"));
     Ok(process)
 }
 
@@ -71,12 +74,12 @@ async fn process_with_failing_wineserver_stop() -> Result<WineTestProcess> {
     let mut process = waiting_smoke_process().await?;
     let processes = process.processes.as_mut().expect("Wine process guard");
 
-    let mut command = TokioCommand::from(processes.stop_wineserver_command());
-    let status = command
-        .status()
+    log_wine_lifecycle(format_args!("pre-stopping wineserver for failure fixture"));
+    processes
+        .stop_wineserver()
         .await
         .context("pre-stop isolated wineserver")?;
-    assert!(status.success(), "wineserver exited with {status}");
+    log_wine_lifecycle(format_args!("failure fixture wineserver pre-stop finished"));
 
     processes.runtime.wineserver = processes.prefix.path().join("missing-wineserver");
     Ok(process)
@@ -182,6 +185,7 @@ async fn shutdown_reports_nonzero_process_exit() -> Result<()> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
     let mut process = WineTestCommand::new(executable).arg("--fail").spawn()?;
     let prefix = prefix_path(&process);
+    log_wine_lifecycle(format_args!("waiting for intentional nonzero child exit"));
     let status = process
         .processes
         .as_mut()
@@ -189,6 +193,7 @@ async fn shutdown_reports_nonzero_process_exit() -> Result<()> {
         .child
         .wait()
         .await?;
+    log_wine_lifecycle(format_args!("intentional child wait finished: {status}"));
     assert!(
         !status.success(),
         "Windows smoke process unexpectedly passed"
@@ -393,18 +398,20 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
     .and_then(std::convert::identity);
     drop(session);
     let shutdown_result = timeout(Duration::from_secs(10), async {
-        let mut command = TokioCommand::new(&runtime.wineserver);
-        command
-            .args(["-k", "-w"])
-            .env("HOME", prefix.path())
-            .env("WINEPREFIX", prefix.path())
-            .env("XDG_RUNTIME_DIR", prefix.path())
-            .kill_on_drop(true);
-        let status = command.status().await.context("stop isolated wineserver")?;
-        anyhow::ensure!(
-            status.success() || status.code() == Some(1),
-            "wineserver exited with {status}"
-        );
+        for action in ["-k", "-w"] {
+            let mut command = TokioCommand::new(&runtime.wineserver);
+            command
+                .arg(action)
+                .env("HOME", prefix.path())
+                .env("WINEPREFIX", prefix.path())
+                .env("XDG_RUNTIME_DIR", prefix.path())
+                .kill_on_drop(true);
+            let status = command.status().await.context("stop isolated wineserver")?;
+            anyhow::ensure!(
+                status.success() || (action == "-k" && status.code() == Some(1)),
+                "wineserver {action} exited with {status}"
+            );
+        }
         Ok::<_, anyhow::Error>(())
     })
     .await

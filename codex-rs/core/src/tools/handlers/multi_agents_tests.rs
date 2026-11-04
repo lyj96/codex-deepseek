@@ -119,7 +119,12 @@ fn invocation(
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
         call_id: "call-1".to_string(),
         tool_name: codex_tools::ToolName::plain(tool_name),
-        source: crate::tools::context::ToolCallSource::Direct,
+        // Mirror the router's explicit plaintext source for the external tool.
+        source: if tool_name == SPAWN_EXTERNAL_AGENT_TOOL_NAME {
+            crate::tools::context::ToolCallSource::DirectPlaintextMessage
+        } else {
+            crate::tools::context::ToolCallSource::Direct
+        },
         payload,
         environments: Default::default(),
     }
@@ -702,6 +707,7 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
         session.services.models_manager = Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             service_tier_test_catalog(),
+            codex_models_manager::ModelOrigin::ExplicitConfig,
         ));
         session.thread_id = root.thread_id;
 
@@ -755,6 +761,7 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
         session.services.models_manager = Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             service_tier_test_catalog(),
+            codex_models_manager::ModelOrigin::ExplicitConfig,
         ));
         session.thread_id = root.thread_id;
 
@@ -1131,17 +1138,19 @@ async fn multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
         .expect("test config should allow feature update");
     set_turn_config(&mut turn, config);
 
+    let mut call = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "task_name": "external",
+            "agent_type": role_name
+        })),
+    );
+    call.source = crate::tools::context::ToolCallSource::DirectPlaintextMessage;
     let output = SpawnAgentHandlerV2::default()
-        .handle(invocation(
-            Arc::new(session),
-            Arc::new(turn),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo",
-                "task_name": "external",
-                "agent_type": role_name
-            })),
-        ))
+        .handle(call)
         .await
         .expect("cross-provider spawn should use an isolated child by default");
     let (content, _) = expect_text_output(output);
@@ -3053,9 +3062,17 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
         nickname: Option<String>,
     }
 
+    // Exercise the real spawn lifecycle against a local endpoint only.
+    let server = wiremock::MockServer::start().await;
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager();
     let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(server.uri());
+    turn.provider =
+        create_model_provider(config.model_provider.clone(), /*auth_manager*/ None);
+    let manager = ThreadManager::with_models_provider_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     config.agent_max_depth = 1;
     config
         .features
@@ -3097,6 +3114,15 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
     assert_eq!(result.task_name, "/root/parent/child");
     assert_eq!(result.nickname, None);
     assert_eq!(success, Some(true));
+    for thread_id in manager.list_thread_ids().await {
+        manager
+            .get_thread(thread_id)
+            .await
+            .expect("spawned thread should remain available")
+            .shutdown_and_wait()
+            .await
+            .expect("shut down test thread");
+    }
 }
 
 #[tokio::test]

@@ -135,7 +135,8 @@ async fn restrictive_launcher_uses_embedded_if_daemon_cannot_start() -> Result<(
             .kill_on_drop(true);
         let mut child = command.spawn()?;
         ensure!(
-            job.assign_and_resume_process(child.id().context("missing CLI pid")?)?,
+            job.assign_and_resume_process(child.id().context("missing CLI pid")?)?
+                .is_some(),
             "CLI job assignment failed"
         );
         let status = child.wait().await?;
@@ -175,10 +176,18 @@ async fn daemon_startup(command: &str) -> Result<()> {
             .success(),
         "failed to prepare CLI test executable"
     );
+    // Startup policy tests use the shipped catalog, without depending on a live
+    // discovery endpoint accepting the fixture's deliberately fake credential.
+    let catalog_path = home.path().join("models.json");
+    fs::write(
+        &catalog_path,
+        serde_json::to_vec(&codex_models_manager::bundled_models_response()?)?,
+    )?;
     fs::write(
         home.path().join("config.toml"),
         format!(
             "model = \"gpt-5.6-terra\"\n\
+         model_catalog_json = {}\n\
          cli_auth_credentials_store = \"file\"\n\
          suppress_unstable_features_warning = true\nanalytics.enabled = false\n\
          windows.sandbox = \"unelevated\"\n\
@@ -186,6 +195,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
          {}\n\
          notice.model_migrations.\"gpt-5.6-terra\" = \"gpt-6-sol\"\n\
          [projects.{}]\ntrust_level = \"{}\"\n",
+            serde_json::to_string(&catalog_path)?,
             if command == "discovered" {
                 "tui.status_line=[\"model\",\"thread-id\",\"thread-name\"]\nfeatures.daemon_auto_start=false"
             } else {
@@ -439,7 +449,8 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 }
                 // PTY reads can split a redraw after the reconnect notice is erased but
                 // before it is repainted. Only inspect completed synchronized updates.
-                if command == "discovered"
+                if (command == "discovered"
+                    || steps.front().is_some_and(|(_, input)| *input == b"\x14"))
                     && output
                         .rfind("\x1b[?2026l")
                         .is_none_or(|end| output[end..].contains("\x1b[?2026h"))
@@ -455,6 +466,11 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 if let Some((ready, input)) = steps.front()
                     && text.contains(ready)
                 {
+                    // A startup header can precede warning delivery and the live composer.
+                    // Open the detailed transcript only after its warning badge is rendered.
+                    if *input == b"\x14" && !text.contains("warning") {
+                        continue;
+                    }
                     if command == "agents-untrusted" && *ready == "Notasksyet" {
                         if !text.contains("enteropennnew") {
                             continue;

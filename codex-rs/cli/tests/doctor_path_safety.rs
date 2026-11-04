@@ -98,10 +98,12 @@ wire_api = "responses"
                 "@echo helper ran>>\"%CODEX_TEST_HELPER_MARKER%\"\r\n@exit /b 0\r\n",
             )?;
         }
-        // Windows selects rg.exe explicitly, so rg.cmd cannot satisfy discovery.
-        // An invalid image still counts as found: doctor must not execute it.
+        // Supply native executable names as well as command scripts on Windows.
+        // Invalid images still count as found: doctor must not execute them.
         #[cfg(windows)]
-        std::fs::write(bin.join("rg.exe"), "not an executable image")?;
+        for executable in ["rg.exe", "git.exe"] {
+            std::fs::write(bin.join(executable), "not an executable image")?;
+        }
         let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
         )))?;
@@ -217,7 +219,7 @@ fn doctor_reports_failed_database_paths() -> Result<()> {
     let fixture = Fixture::new()?;
     let sqlite_home = fixture.root.path().join("sqlite");
     std::fs::create_dir(&sqlite_home)?;
-    let sqlite = SqliteConfig::from_sqlite_home(AbsolutePathBuf::try_from(sqlite_home.clone())?);
+    let sqlite = SqliteConfig::new_for_testing(AbsolutePathBuf::try_from(sqlite_home.clone())?);
     let config_file = fixture.home.join("config.toml");
     let config = std::fs::read_to_string(&config_file)?;
     let sqlite_home = toml::Value::String(sqlite_home.display().to_string());
@@ -311,7 +313,7 @@ fn doctor_redacts_failed_database_paths_in_json() -> Result<()> {
     let fixture = Fixture::new()?;
     let sqlite_home = fixture.root.path().join("doctor-secret-sqlite");
     std::fs::create_dir(&sqlite_home)?;
-    let sqlite = SqliteConfig::from_sqlite_home(AbsolutePathBuf::try_from(sqlite_home.clone())?);
+    let sqlite = SqliteConfig::new_for_testing(AbsolutePathBuf::try_from(sqlite_home.clone())?);
     let config_file = fixture.home.join("config.toml");
     let config = std::fs::read_to_string(&config_file)?;
     let sqlite_home = toml::Value::String(sqlite_home.display().to_string());

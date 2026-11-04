@@ -120,6 +120,12 @@ pub(crate) fn prepare_spawn_context_common(
     })
 }
 
+pub(crate) const LEGACY_BACKEND_UNSUPPORTED: &str = "The legacy Windows sandbox backend cannot enforce deletion isolation; use the elevated Windows sandbox backend after completing its setup";
+
+pub(crate) fn reject_legacy_backend() -> Result<()> {
+    anyhow::bail!(LEGACY_BACKEND_UNSUPPORTED)
+}
+
 pub(crate) fn prepare_legacy_spawn_context(
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
@@ -129,6 +135,9 @@ pub(crate) fn prepare_legacy_spawn_context(
     command: &[String],
     options: SpawnPrepOptions,
 ) -> Result<SpawnContext> {
+    // Reject before environment preparation, capability persistence, or ACL writes.
+    // Never fall back to an unrestricted process or provision another backend here.
+    reject_legacy_backend()?;
     let common = prepare_spawn_context_common(
         permission_profile,
         workspace_roots,
@@ -288,19 +297,22 @@ pub(crate) fn apply_legacy_session_acl_rules(
         }
         if let Some(readonly_sid) = acl_sids.readonly_sid {
             for p in &allow {
-                let _ = add_allow_ace(p, readonly_sid.as_ptr());
+                add_allow_ace(p, readonly_sid.as_ptr())
+                    .with_context(|| format!("apply read access to {}", p.display()))?;
             }
         } else {
             for p in &allow {
                 let Some(root_sid) = matching_root_capability(p, acl_sids.write_root_sids) else {
-                    continue;
+                    anyhow::bail!("write capability missing for {}", p.display());
                 };
-                let _ = ensure_allow_write_aces(p, &[root_sid.sid.as_ptr()]);
+                ensure_allow_write_aces(p, &[root_sid.sid.as_ptr()])
+                    .with_context(|| format!("apply write access to {}", p.display()))?;
             }
         }
         for p in &deny {
             for root_sid in deny_root_capabilities_for_path(p, acl_sids.write_root_sids) {
-                let _ = add_deny_write_ace(p, root_sid.sid.as_ptr());
+                add_deny_write_ace(p, root_sid.sid.as_ptr())
+                    .with_context(|| format!("protect deny-write path {}", p.display()))?;
             }
         }
         if !additional_deny_read_paths.is_empty() {
@@ -337,8 +349,10 @@ pub(crate) fn apply_legacy_session_acl_rules(
         {
             let canonical_cwd = canonicalize_path(current_dir);
             if is_command_cwd_root(&workspace_sid.root, &canonical_cwd) {
-                let _ = protect_workspace_codex_dir(current_dir, workspace_sid.sid.as_ptr());
-                let _ = protect_workspace_agents_dir(current_dir, workspace_sid.sid.as_ptr());
+                protect_workspace_codex_dir(current_dir, workspace_sid.sid.as_ptr())
+                    .context("protect workspace .codex directory")?;
+                protect_workspace_agents_dir(current_dir, workspace_sid.sid.as_ptr())
+                    .context("protect workspace .agents directory")?;
             }
         }
     }
@@ -509,31 +523,27 @@ mod tests {
     }
 
     #[test]
-    fn legacy_spawn_env_applies_offline_network_rewrite() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let cwd = TempDir::new().expect("tempdir");
-        let mut env_map = HashMap::new();
-        let workspace_roots = workspace_roots_for(cwd.path());
-
-        let _context = prepare_legacy_spawn_context(
+    fn legacy_spawn_rejects_before_environment_or_home_mutation() {
+        let temp = TempDir::new().expect("tempdir");
+        let codex_home = temp.path().join("unused-home");
+        let mut env_map = HashMap::from([("HTTP_PROXY".to_string(), "unchanged".to_string())]);
+        let original_env = env_map.clone();
+        let result = prepare_legacy_spawn_context(
             &PermissionProfile::workspace_write(),
-            workspace_roots.as_slice(),
-            codex_home.path(),
-            cwd.path(),
+            workspace_roots_for(temp.path()).as_slice(),
+            &codex_home,
+            temp.path(),
             &mut env_map,
             &["cmd.exe".to_string()],
             SpawnPrepOptions {
                 inherit_path: true,
                 add_git_safe_directory: false,
             },
-        )
-        .expect("legacy env prep");
-
-        assert_eq!(env_map.get("SBX_NONET_ACTIVE"), Some(&"1".to_string()));
-        assert_eq!(
-            env_map.get("HTTP_PROXY"),
-            Some(&"http://127.0.0.1:9".to_string())
         );
+        let error = result.err().expect("legacy backend must be rejected");
+        assert_eq!(error.to_string(), super::LEGACY_BACKEND_UNSUPPORTED);
+        assert_eq!(env_map, original_env);
+        assert!(!codex_home.exists());
     }
 
     #[test]

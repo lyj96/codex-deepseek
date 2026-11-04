@@ -33,7 +33,6 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
-use codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard;
 use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
@@ -382,7 +381,7 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy(
     let mut sandbox = read_only_sandbox_for_cwd(readonly_dir.clone())?;
     match sandbox_type {
         SandboxType::WindowsRestrictedToken => {
-            sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+            sandbox.windows_sandbox_selection = WindowsSandboxSelection::Elevated;
         }
         SandboxType::WindowsMxc => {
             sandbox.windows_sandbox_selection = WindowsSandboxSelection::Mxc;
@@ -471,28 +470,6 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy(
 async fn file_system_elevated_relative_read_denial_uses_policy_cwd(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
-    let _account_guard = WindowsSandboxAccountTestGuard::acquire()?;
-    // Both implementations re-enter this test binary; the elevated backend finds its helpers
-    // next to that binary, while Cargo and Bazel provide them separately.
-    let test_exe = std::env::current_exe()?;
-    let resources = test_exe
-        .parent()
-        .context("Windows test executable should have a parent directory")?
-        .join("codex-resources");
-    if let Err(error) = std::fs::create_dir_all(&resources)
-        && !(error.kind() == std::io::ErrorKind::PermissionDenied && resources.is_dir())
-    {
-        return Err(error).context("create Windows sandbox test resources");
-    }
-    for name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
-        let source = codex_utils_cargo_bin::cargo_bin(name)?;
-        let destination = resources.join(Path::new(name).with_extension("exe"));
-        if let Err(error) = codex_utils_cargo_bin::copy_executable(&source, &destination)
-            && !(error.kind() == std::io::ErrorKind::PermissionDenied && destination.is_file())
-        {
-            return Err(error).with_context(|| format!("stage Windows sandbox helper {name}"));
-        }
-    }
     let context = create_file_system_context(implementation).await?;
     let tmp = tempfile::TempDir::new()?;
     let policy_cwd = tmp.path().join("checkout");
@@ -638,7 +615,7 @@ async fn file_system_private_desktop_survives_helper_exits_and_separates_permiss
     }
 
     let mut readonly = read_only_sandbox_for_cwd(tmp.path().to_path_buf())?;
-    readonly.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+    readonly.windows_sandbox_selection = WindowsSandboxSelection::Elevated;
     file_system
         .write_file(
             &uri,

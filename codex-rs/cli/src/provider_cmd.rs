@@ -596,12 +596,12 @@ async fn run_model(codex_home: &Path, cli: ModelCli) -> anyhow::Result<()> {
             let provider = registry
                 .providers
                 .get_mut(&args.provider)
-                .expect("provider was checked above");
+                .with_context(|| format!("provider `{}` is not managed", args.provider))?;
             let slot = provider
                 .models
                 .iter_mut()
                 .find(|candidate| candidate.id == args.id)
-                .expect("model was checked above");
+                .with_context(|| format!("model `{}` is not managed", args.id))?;
             *slot = model;
             persist_and_apply(codex_home, &registry).await?;
             println!("Updated model `{}`.", args.id);

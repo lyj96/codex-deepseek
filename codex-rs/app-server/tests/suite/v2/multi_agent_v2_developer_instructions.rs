@@ -184,7 +184,12 @@ async fn spawned_subagents_apply_configured_developer_instruction_precedence(
     } else {
         "gpt-5.4"
     };
-    let mut config = MockResponsesConfig::new(&server.uri()).with_model(configured_model);
+    // These cases exercise native OpenAI agent-message and metadata semantics.
+    let mut config = MockResponsesConfig::new(&server.uri())
+        .with_model_provider("openai")
+        .with_provider_name("OpenAI")
+        .with_provider_config("requires_openai_auth = false\ninclude_internal_metadata = true")
+        .with_model(configured_model);
     if role_has_instructions {
         config =
             config.with_root_config(&format!("developer_instructions = {ROLE_INSTRUCTIONS:?}"));
@@ -385,6 +390,9 @@ async fn compacted_full_history_fork_applies_child_developer_instructions(
         feature_config.push_str("\npreserve_fork_prefix = false");
     }
     MockResponsesConfig::new(&server.uri())
+        .with_model_provider("openai")
+        .with_provider_name("OpenAI")
+        .with_provider_config("requires_openai_auth = false\ninclude_internal_metadata = true")
         .with_model("gpt-5.4")
         .with_root_config(&format!(
             "developer_instructions = {PARENT_INSTRUCTIONS:?}\nmodel_context_window = 100000\nmodel_auto_compact_token_limit = 90000\ncompact_prompt = {COMPACT_PROMPT:?}"
@@ -646,6 +654,9 @@ async fn cold_resume_preserves_effective_developer_instructions_for_worker(
         ));
     }
     MockResponsesConfig::new(&server.uri())
+        .with_model_provider("openai")
+        .with_provider_name("OpenAI")
+        .with_provider_config("requires_openai_auth = false\ninclude_internal_metadata = true")
         .with_model("gpt-5.5")
         .with_root_config(&format!(
             "developer_instructions = {PARENT_INSTRUCTIONS:?}\nmodel_reasoning_effort = \"high\""
@@ -709,7 +720,7 @@ async fn cold_resume_preserves_effective_developer_instructions_for_worker(
         assert_eq!(baseline.thread.status, ThreadStatus::Idle);
         assert_eq!(baseline.thread.can_accept_direct_input, Some(false));
         assert_eq!(baseline.thread.agent_role.as_deref(), agent_type);
-        assert_eq!(baseline.model_provider, "mock_provider");
+        assert_eq!(baseline.model_provider, "openai");
         assert!(matches!(&baseline.sandbox, SandboxPolicy::ReadOnly { .. }));
         assert_eq!(baseline.reasoning_effort, Some(ReasoningEffort::Low));
 
@@ -732,10 +743,10 @@ async fn cold_resume_preserves_effective_developer_instructions_for_worker(
 
         let child_resume_params = ThreadResumeParams {
             thread_id: child_thread_id,
-            model_provider: Some("mock_provider".to_string()),
+            model_provider: Some("openai".to_string()),
             sandbox: Some(SandboxMode::DangerFullAccess),
             config: Some(HashMap::from([(
-                "model_providers.mock_provider.base_url".to_string(),
+                "model_providers.openai.base_url".to_string(),
                 json!(redirect_base_url),
             )])),
             developer_instructions: Some(DIRECT_RESUME_INSTRUCTIONS.to_string()),
@@ -764,8 +775,8 @@ async fn cold_resume_preserves_effective_developer_instructions_for_worker(
                 r#"developer_instructions = {ROLE_INSTRUCTIONS:?}
 model_reasoning_effort = "high"
 sandbox_mode = "danger-full-access"
-model_providers.mock_provider.name = "Untrusted role provider"
-model_providers.mock_provider.base_url = {redirect_base_url:?}
+model_providers.openai.name = "Untrusted role provider"
+model_providers.openai.base_url = {redirect_base_url:?}
 features.shell_tool = false
 "#
             ),
@@ -878,7 +889,7 @@ features.shell_tool = false
     if history_mode == ThreadHistoryMode::Paginated {
         let state_db = StateRuntime::init(
             codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
-            "mock_provider".into(),
+            "openai".into(),
         )
         .await?;
         let mut metadata = state_db

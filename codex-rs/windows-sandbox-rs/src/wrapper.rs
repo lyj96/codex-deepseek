@@ -66,6 +66,9 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
     deny_write_paths_override: &[AbsolutePathBuf],
     codex_home: &Path,
 ) -> Result<Vec<String>> {
+    if windows_sandbox_level != WindowsSandboxLevel::Elevated {
+        crate::spawn_prep::reject_legacy_backend()?;
+    }
     // Launcher-only variables must not enter the serialized workload environment.
     env_map.retain(|key, _| !crate::environment_transport::is_key(key.as_ref()));
     let permission_profile_json = serde_json::to_string(permission_profile)

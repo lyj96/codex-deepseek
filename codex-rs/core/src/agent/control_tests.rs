@@ -491,7 +491,11 @@ async fn mcp_attribution_in_constructed_request(thread: &CodexThread) -> McpAttr
             .session
             .clone_history()
             .await
-            .for_prompt(&step_context.settings.model_info.input_modalities),
+            .for_prompt(
+                &step_context.settings.model_info.input_modalities,
+                thread.session.services.image_store.as_ref(),
+            )
+            .await,
         &step_context,
         thread.session.get_prompt_base_instructions().await,
         thread
@@ -2412,7 +2416,14 @@ async fn spawn_agent_disabled_plugins_follow_parent_unless_overridden(
     disabled_plugin_ids: Option<Vec<String>>,
     expected: Vec<String>,
 ) {
-    let harness = AgentControlHarness::new().await;
+    // These settings assertions must not depend on the public API or DNS.
+    let server = wiremock::MockServer::start().await;
+    let (home, config) = test_config_with_cli_overrides(vec![(
+        "openai_base_url".to_string(),
+        TomlValue::String(server.uri()),
+    )])
+    .await;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
     let parent = harness
         .manager
         .start_thread(StartThreadOptions {
@@ -2736,8 +2747,8 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
         Vec::new()
     };
     assert_eq!(
-        child_thread.session.dynamic_tools().await,
-        expected_dynamic_tools
+        child_thread.session.dynamic_tools().await.as_ref(),
+        expected_dynamic_tools.as_slice()
     );
     assert!(
         !history_contains_text(
@@ -2783,6 +2794,7 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
 
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
     let parent_resume_metadata = codex_history::CompactionResumeMetadata {
+        dynamic_tools: None,
         multi_agent_version: Some(MultiAgentVersion::V2),
         last_started_turn_id: Some("parent-turn".to_string()),
         turn_attribution: Some(codex_history::TurnAttribution {
@@ -3940,6 +3952,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
                 compaction_response_id: None,
                 latest_token_usage_record: None,
                 resume_metadata: Some(codex_history::CompactionResumeMetadata {
+                    dynamic_tools: None,
                     multi_agent_version: Some(MultiAgentVersion::V2),
                     last_started_turn_id: None,
                     turn_attribution: None,
@@ -4074,6 +4087,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         assert_eq!(
             inherited_state,
             Some(codex_history::CompactionResumeMetadata {
+                dynamic_tools: None,
                 multi_agent_version: Some(MultiAgentVersion::V2),
                 last_started_turn_id: None,
                 turn_attribution: None,

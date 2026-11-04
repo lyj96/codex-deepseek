@@ -101,7 +101,7 @@ print_bazel_test_log_tails() {
   # mode can make `bazel info` fail, which would hide the real test log path.
   for arg in "${post_config_bazel_args[@]}"; do
     case "$arg" in
-      --host_platform=* | --repo_contents_cache=* | --repository_cache=*)
+      --host_platform=* | --platforms=* | --repo_contents_cache=* | --repository_cache=*)
         bazel_info_args+=("$arg")
         ;;
     esac
@@ -259,15 +259,85 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUI
   # Windows cross-compilation depends on authenticated RBE. Preserve the local
   # Windows build shape when credentials are unavailable.
   ci_config=ci-windows
-  # Keep Rust proc-macros on the same GNU ABI as hermetic LLVM's C/C++
-  # dependencies. A forced MSVC host links MinGW objects with rust-lld/MSVC.
+  # rules_rs 0.0.96 supplies an MSVC-host rustc on Windows. Proc-macros must
+  # target that compiler's host ABI even when the application targets gnullvm.
+  windows_msvc_host_platform=1
 fi
 
 post_config_bazel_args=()
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  case "${bazel_args[0]}" in
+    build|test|coverage)
+      # Provenance receipts consume ctx.info_file. Pin the repository's status
+      # producer after runner/remote rc configuration instead of depending on
+      # the effective rc command to supply STABLE_GIT_COMMIT.
+      if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+        post_config_bazel_args+=(--workspace_status_command=./scripts/workspace-status.cmd)
+      else
+        post_config_bazel_args+=(--workspace_status_command=./scripts/workspace-status.sh)
+      fi
+      ;;
+  esac
+fi
+if [[ "${RUNNER_OS:-}" == "Linux" && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+  case "${CODEX_BAZEL_TARGET_TRIPLE:-}" in
+    x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl)
+      post_config_bazel_args+=(--extra_toolchains=//:linux_gnu_tests_on_gnu_host_toolchain,//:linux_musl_tests_on_gnu_host_toolchain)
+      ;;
+  esac
+fi
+if [[ -n "${CODEX_BAZEL_TARGET_TRIPLE:-}" ]]; then
+  case "$CODEX_BAZEL_TARGET_TRIPLE" in
+    aarch64-apple-darwin|x86_64-apple-darwin|x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl|x86_64-pc-windows-gnullvm|x86_64-pc-windows-msvc) ;;
+    *) echo "Unsupported Bazel CI target: $CODEX_BAZEL_TARGET_TRIPLE" >&2; exit 1 ;;
+  esac
+  has_declared_platform_override=0
+  for arg in "${bazel_args[@]}"; do
+    if [[ "$arg" == --platforms=* || "$arg" == --platforms ]]; then
+      has_declared_platform_override=1
+      break
+    fi
+  done
+  if [[ $has_declared_platform_override -eq 0 ]]; then
+    # Matrix labels and cache keys do not select a compiler target. Set it
+    # after CI configs so ci-linux's RBE platform cannot replace musl coverage.
+    post_config_bazel_args+=("--platforms=@rules_rs//rs/platforms:${CODEX_BAZEL_TARGET_TRIPLE}")
+  fi
+fi
+if [[ "${bazel_args[0]}" == "test" && "${RUNNER_OS:-}" == "Linux" && "${GITHUB_ACTIONS:-}" == "true" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" && -z "${BUILDBUDDY_API_KEY:-}" && ${#bazel_targets[@]} -eq 1 && "${bazel_targets[0]}" == "//codex-rs/rollout:rollout-unit-tests" ]]; then
+  # This ownership fixture needs the runner's supplementary groups. The Linux
+  # sandbox maps only one GID. Keep process cleanup and a separate execution
+  # directory for this test group; other actions retain their usual isolation.
+  # Bazel 9 ignores strategy_regexp for TestRunner. Apply the mnemonic override
+  # only to an invocation containing this exact single test target.
+  post_config_bazel_args+=("--strategy=TestRunner=processwrapper-sandbox")
+fi
+if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+  has_target_platform_override=0
+  for arg in "${bazel_args[@]}"; do
+    if [[ "$arg" == --platforms=* || "$arg" == --platforms ]]; then
+      has_target_platform_override=1
+      break
+    fi
+  done
+  if [[ $has_target_platform_override -eq 0 && -z "${CODEX_BAZEL_TARGET_TRIPLE:-}" ]]; then
+    # The authenticated cross config normally supplies this target. Retain
+    # gnullvm coverage when the local fallback changes only the host platform.
+    post_config_bazel_args+=("--platforms=//:windows_x86_64_gnullvm")
+  fi
+  post_config_bazel_args+=("--extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain")
+  # Hermetic LLVM's Windows C/C++ toolchain also matches MSVC platforms but
+  # emits MinGW objects. Use the installed SDK for MSVC host dependencies only;
+  # the ABI constraint leaves the application's gnullvm C/C++ inputs unchanged.
+  post_config_bazel_args+=(
+    --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0
+    --extra_toolchains=//:windows_x86_64_msvc_cc_toolchain
+  )
+fi
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; then
   has_host_platform_override=0
   for arg in "${bazel_args[@]}"; do
-    if [[ "$arg" == --host_platform=* ]]; then
+    if [[ "$arg" == --host_platform=* || "$arg" == --host_platform ]]; then
       has_host_platform_override=1
       break
     fi
@@ -409,6 +479,21 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   bazel_run_args+=("--config=${ci_config}")
 else
   echo "BuildBuddy API key is not available; using local Bazel configuration."
+  if [[ "${GITHUB_ACTIONS:-}" == "true" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]; then
+    has_disk_cache_override=0
+    for arg in "${bazel_args[@]}"; do
+      if [[ "$arg" == --disk_cache=* || "$arg" == --disk_cache ]]; then
+        has_disk_cache_override=1
+        break
+      fi
+    done
+    if [[ $has_disk_cache_override -eq 0 ]]; then
+      # The remote CI config disables this cache, but the unkeyed fallback
+      # otherwise inherits the local default and duplicates action outputs.
+      # Hosted jobs persist repository downloads, not this disposable cache.
+      bazel_run_args+=(--disk_cache=)
+    fi
+  fi
 fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")

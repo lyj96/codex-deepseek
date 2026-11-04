@@ -7,7 +7,7 @@ pub const CODEX_ARG0_EXEC_HELPER_ARG1: &str = "--codex-run-as-arg0-exec-helper";
 pub fn main() -> ! {
     use std::os::unix::process::CommandExt;
 
-    let mut args = std::env::args_os();
+    let mut args = codex_utils_process::startup_args_os();
     let _program = args.next();
     let _helper_mode = args.next();
     let Some(arg0) = args.next() else {

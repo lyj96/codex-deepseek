@@ -4,11 +4,51 @@ import copy
 import hashlib
 import json
 import unittest
+from unittest import mock
 
-from check_upstream_security import classify, official_lock, validate_policy
+from check_upstream_security import (
+    NoCredentialRedirect,
+    classify,
+    download,
+    official_lock,
+    validate_policy,
+)
 
 
 class UpstreamSecurityTests(unittest.TestCase):
+    def test_workflow_token_is_sent_only_to_exact_https_github_api(self):
+        with (
+            mock.patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}),
+            mock.patch("check_upstream_security.build_opener") as opener,
+            mock.patch("check_upstream_security.urlopen") as anonymous,
+        ):
+            download("https://api.github.com/repos/openai/codex/git/ref/tags/test")
+            request = opener.return_value.open.call_args.args[0]
+            self.assertEqual(request.get_header("Authorization"), "Bearer test-token")
+            anonymous.assert_not_called()
+            opener.reset_mock()
+            for url in (
+                "https://raw.githubusercontent.com/openai/codex/test/Cargo.lock",
+                "https://api.github.com.example.test/",
+                "http://api.github.com/",
+                "https://api.github.com:444/",
+            ):
+                download(url)
+                self.assertEqual(anonymous.call_args.args[0], url)
+            opener.assert_not_called()
+
+    def test_authenticated_redirect_is_rejected(self):
+        for destination in (
+            "https://api.github.com/redirected",
+            "https://example.test/steal",
+            "http://api.github.com/insecure",
+        ):
+            self.assertIsNone(
+                NoCredentialRedirect().redirect_request(
+                    None, None, 302, "Found", {}, destination
+                )
+            )
+
     def setUp(self):
         self.package = {
             "name": "example",

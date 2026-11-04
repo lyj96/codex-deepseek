@@ -30,7 +30,7 @@ pub fn configure_test_binary_dispatch<F>(
 where
     F: FnOnce(&str, Option<&str>) -> TestBinaryDispatchMode,
 {
-    let mut args = std::env::args_os();
+    let mut args = codex_utils_process::startup_args_os();
     let argv0 = args.next().unwrap_or_default();
     let exe_name = Path::new(&argv0)
         .file_name()

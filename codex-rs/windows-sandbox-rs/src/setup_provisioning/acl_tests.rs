@@ -122,8 +122,6 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
         );
 
         let real_user = std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
-        let real_sid = resolve_sid(&real_user).expect("resolve real user SID");
-        let real_psid = sid_bytes_to_psid(&real_sid).expect("convert real user SID");
         let payload = Payload {
             version: SETUP_VERSION,
             offline_username: String::new(),

@@ -60,6 +60,7 @@ async fn usage_notice_preserves_composer_geometry_on_recovery() -> Result<()> {
                 /*replay_kind*/ None,
             );
             assert!(app.chat_widget.is_user_turn_pending_or_running());
+            app.chat_widget.freeze_status_for_snapshot();
             if queued {
                 app.keymap.chat.edit_queued_message = vec![crate::key_hint::shift(KeyCode::Left)];
                 app.chat_widget

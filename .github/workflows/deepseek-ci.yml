@@ -137,7 +137,7 @@ jobs:
           }
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
       - name: Validate codex-dp npm packages
         shell: bash
         run: |
@@ -161,8 +161,9 @@ jobs:
           CODEX_CLI_PATH="$fake_codex" node "$stage/bin/codex-dp.js" --version \
             | grep -Fx 'fake-codex --version'
       - uses: ./.github/actions/setup-ci
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # pinned action; toolchain from stable below
         with:
+          toolchain: "1.95.0"
           components: rustfmt
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
         with:
@@ -175,13 +176,19 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Build agent runtime test helpers
         working-directory: codex-rs
-        run: >-
-          CARGO_BUILD_JOBS=1 cargo build --locked
-          --bin codex-code-mode-host --bin codex-exec --bin exec-server
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+          CARGO_BUILD_JOBS=1 cargo build --locked \
+            --bin codex-code-mode-host --bin codex-exec --bin exec-server --bin codex-exec-server --bin bwrap
+          "${CARGO_TARGET_DIR:-target}/debug/bwrap" --version
       - name: Test external provider routing
         working-directory: codex-rs
         run: |
           CARGO_BUILD_JOBS=1 just test -p codex-cli --bin codex provider_cmd::tests
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server --lib config_manager:: --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::catalog_provider_admission --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::model_provider_enforcement --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::thread_settings_update
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::account::
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::model_list
@@ -193,6 +200,10 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all model_catalog_refresh_preserves_tools_and_history
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib provider
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent::control
+          CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent::host --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --lib thread_spawn::tests --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::scenarios::reserved_spawn --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::thread_resume --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without_agent_type
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_uses_explicit_model_route
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_provider_tools_use_plaintext_message_schemas
@@ -315,9 +326,10 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
-          node-version: 24
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+          node-version-file: .nvmrc
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # pinned action; toolchain from stable below
         with:
+          toolchain: "1.95.0"
           targets: x86_64-pc-windows-msvc
       - uses: ./.github/actions/setup-rusty-v8
         with:
@@ -331,7 +343,7 @@ jobs:
           LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
         run: >-
           cargo check --locked --target x86_64-pc-windows-msvc
-          --bin codex --bin codex-app-server --bin codex-code-mode-host
+          --bin codex --bin codex-app-server --bin codex-code-mode-host --bin codex-exec-server
           --bin codex-command-runner --bin codex-windows-sandbox-setup
 
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
@@ -387,9 +399,10 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
-          node-version: 24
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+          node-version-file: .nvmrc
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # pinned action; toolchain from stable below
         with:
+          toolchain: "1.95.0"
           targets: aarch64-apple-darwin
       - uses: ./.github/actions/setup-rusty-v8
         with:
@@ -398,7 +411,7 @@ jobs:
         working-directory: codex-rs
         run: >-
           cargo check --locked --target aarch64-apple-darwin
-          --bin codex --bin codex-app-server --bin codex-code-mode-host
+          --bin codex --bin codex-app-server --bin codex-code-mode-host --bin codex-exec-server
 
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
         with:
@@ -427,8 +440,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # pinned action; toolchain from stable below
         with:
+          toolchain: "1.95.0"
           targets: x86_64-unknown-linux-musl
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:

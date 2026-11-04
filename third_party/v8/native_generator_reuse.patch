@@ -1,0 +1,61 @@
+# Reuse native Mac generator libraries without changing target ABI or features.
+# Applied after v8_defs.patch; cross-OS/CPU generators retain exec configuration.
+diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bzl
+--- a/orig/v8-15.2.124.1/bazel/defs.bzl
++++ b/mod/v8-15.2.124.1/bazel/defs.bzl
+@@ -6,7 +6,7 @@
+ This module contains helper functions to compile V8.
+ """
+
+-load("@@//third_party/v8:snapshot_platform.bzl", "V8SnapshotPlatformInfo")
++load("@@//third_party/v8:snapshot_platform.bzl", "V8SnapshotPlatformInfo", "can_use_native_macos_tool")
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+@@ -427,7 +427,7 @@
+         outputs = outs,
+         inputs = ctx.files.srcs,
+         arguments = args,
+-        executable = ctx.executable.tool,
++        executable = (ctx.attr.target_tool if can_use_native_macos_tool(ctx) else ctx.attr.tool)[DefaultInfo].files_to_run,
+         mnemonic = "GenTorqueFiles",
+         progress_message = "Generating Torque files",
+     )
+@@ -453,6 +453,15 @@
+             cfg = "exec",
+         ),
+         "args": attr.string_list(),
++        "target_tool": attr.label(executable = True, cfg = "target", mandatory = True),
++        "_snapshot_execution_platform": attr.label(
++            default = Label("@v8//:snapshot_execution_platform"),
++            providers = [V8SnapshotPlatformInfo],
++            cfg = "exec",
++        ),
++        "_macos": attr.label(default = "@platforms//os:macos"),
++        "_arm64": attr.label(default = "@platforms//cpu:aarch64"),
++        "_x64": attr.label(default = "@platforms//cpu:x86_64"),
+     },
+ )
+
+@@ -468,6 +477,10 @@
+             "@v8//bazel/config:v8_target_is_32_bits": ":noicu/torque_non_pointer_compression",
+             "//conditions:default": ":noicu/torque",
+         }),
++        target_tool = select({
++            "@v8//bazel/config:v8_target_is_32_bits": ":noicu/torque_non_pointer_compression",
++            "//conditions:default": ":noicu/torque",
++        }),
+     )
+     _v8_torque_files(
+         name = "icu/" + name,
+@@ -477,6 +490,10 @@
+         definition_extras = definition_extras,
+         initializer_extras = initializer_extras,
+         tool = select({
++            "@v8//bazel/config:v8_target_is_32_bits": ":icu/torque_non_pointer_compression",
++            "//conditions:default": ":icu/torque",
++        }),
++        target_tool = select({
+             "@v8//bazel/config:v8_target_is_32_bits": ":icu/torque_non_pointer_compression",
+             "//conditions:default": ":icu/torque",
+         }),
