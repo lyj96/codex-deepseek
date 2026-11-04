@@ -854,15 +854,15 @@ async fn get_model_info_uses_custom_catalog() {
 }
 
 #[tokio::test]
-async fn get_model_info_prefers_config_catalog_over_manager_catalog() {
-    let manager = static_manager_for_tests(ModelsResponse {
-        models: vec![remote_model("gpt-manager", "Manager", /*priority*/ 0)],
-    });
+async fn static_manager_keeps_provider_catalog_over_config_catalog() {
     let mut external = remote_model("deepseek-v4-pro", "DeepSeek V4 Pro", /*priority*/ 0);
     external.supports_image_detail_original = true;
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![external],
+    });
     let config = ModelsManagerConfig {
         model_catalog: Some(ModelsResponse {
-            models: vec![external],
+            models: vec![remote_model("gpt-manager", "Manager", /*priority*/ 0)],
         }),
         ..Default::default()
     };
