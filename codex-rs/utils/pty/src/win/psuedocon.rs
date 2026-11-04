@@ -47,6 +47,8 @@ use winapi::shared::ntdef::NTSTATUS;
 use winapi::shared::ntstatus::STATUS_SUCCESS;
 use winapi::shared::winerror::HRESULT;
 use winapi::shared::winerror::S_OK;
+use winapi::um::consoleapi::GetConsoleCP;
+use winapi::um::consoleapi::SetConsoleCtrlHandler;
 use winapi::um::handleapi::*;
 use winapi::um::processthreadsapi::*;
 use winapi::um::winbase::CREATE_UNICODE_ENVIRONMENT;
@@ -54,8 +56,6 @@ use winapi::um::winbase::EXTENDED_STARTUPINFO_PRESENT;
 use winapi::um::winbase::STARTF_USESTDHANDLES;
 use winapi::um::winbase::STARTUPINFOEXW;
 use winapi::um::wincon::COORD;
-use winapi::um::wincon::GetConsoleCP;
-use winapi::um::wincon::SetConsoleCtrlHandler;
 use winapi::um::winnt::HANDLE;
 use winapi::um::winnt::OSVERSIONINFOW;
 
