@@ -193,6 +193,7 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::model_list
           CARGO_BUILD_JOBS=1 just test -p codex-models-manager --lib --no-tests fail
           CARGO_BUILD_JOBS=1 just test -p codex-model-provider --lib
+          CARGO_BUILD_JOBS=1 just test -p codex-mcp --lib connection_pool::tests --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib model_catalog
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::spawn_agent_description
