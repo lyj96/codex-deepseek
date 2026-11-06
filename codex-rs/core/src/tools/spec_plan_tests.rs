@@ -434,6 +434,7 @@ fn mcp_runtime(
     RegisteredTool {
         runtime: handler,
         exposure,
+        native_review: Default::default(),
         model_spec: None,
     }
 }
@@ -1739,6 +1740,7 @@ async fn strict_namespace_ownership_requires_tool_namespace_inventory_opt_in() {
             RegisteredTool {
                 runtime: Arc::new(McpHandler::new(tool).expect("MCP tool spec should build")),
                 exposure,
+                native_review: Default::default(),
                 model_spec: None,
             }
         })
@@ -2035,6 +2037,7 @@ async fn strict_tool_collisions_allow_multiple_tools_in_one_namespace() {
                         McpHandler::new(undocumented_tool).expect("MCP tool spec should build"),
                     ),
                     exposure: ToolExposure::Direct,
+                    native_review: Default::default(),
                     model_spec: None,
                 },
                 mcp_runtime("shared", "shared", "lookup", ToolExposure::Direct),
@@ -2077,6 +2080,7 @@ async fn relaxed_tool_collisions_preserve_first_nonempty_namespace_description()
             RegisteredTool {
                 runtime: Arc::new(McpHandler::new(tool).expect("MCP tool spec should build")),
                 exposure: ToolExposure::Direct,
+                native_review: Default::default(),
                 model_spec: None,
             }
         };
@@ -2246,6 +2250,11 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     let cache = ToolSearchHandlerCache::default();
 
     let (_session, mut first_turn) = make_session_and_context().await;
+    set_feature(
+        &mut first_turn,
+        Feature::DeferredToolWorldState,
+        /*enabled*/ false,
+    );
     update_turn_settings_for_test(&mut first_turn, |settings| {
         Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
     });
@@ -2275,6 +2284,11 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     let first_plan = ToolPlanProbe::from_router(first_router);
 
     let (_session, mut second_turn) = make_session_and_context().await;
+    set_feature(
+        &mut second_turn,
+        Feature::DeferredToolWorldState,
+        /*enabled*/ false,
+    );
     update_turn_settings_for_test(&mut second_turn, |settings| {
         Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
     });
@@ -2898,6 +2912,69 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
     }
 }
 
+fn install_external_tool_catalog(turn: &mut TurnContext) {
+    let mut external_model = turn.model_info().model.as_ref().clone();
+    external_model.slug = "deepseek-test".to_string();
+    external_model.display_name = "DeepSeek Test".to_string();
+    external_model.visibility = ModelVisibility::List;
+    let catalog_dir = turn.config.codex_home.join("model-catalogs");
+    std::fs::create_dir_all(&catalog_dir).expect("create external model catalog directory");
+    std::fs::write(
+        catalog_dir.join("deepseek.json"),
+        serde_json::to_vec(&codex_protocol::openai_models::ModelsResponse {
+            models: vec![external_model],
+        })
+        .expect("serialize external model catalog"),
+    )
+    .expect("write external model catalog");
+    update_config(turn, |config| {
+        config
+            .model_providers
+            .insert("deepseek".to_string(), config.model_provider.clone());
+    });
+}
+
+#[test_case::test_case(false; "review_disabled")]
+#[test_case::test_case(true; "review_required")]
+#[tokio::test]
+async fn external_agent_native_review_preserves_original_plaintext_call(review_required: bool) {
+    let (_session, mut turn) = make_session_and_context().await;
+    set_feature(&mut turn, Feature::MultiAgentV2, /*enabled*/ true);
+    set_feature(
+        &mut turn,
+        Feature::GuardianNativeMultiAgentHistory,
+        review_required,
+    );
+    install_external_tool_catalog(&mut turn);
+    let router = plan_with_model(&turn, turn.model_info(), ToolPlanInputs::default());
+    for tool_name in [
+        SPAWN_EXTERNAL_AGENT_TOOL_NAME,
+        SEND_EXTERNAL_MESSAGE_TOOL_NAME,
+        FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
+    ] {
+        let original = codex_protocol::models::ResponseItem::FunctionCall {
+            id: None,
+            name: tool_name.to_string(),
+            namespace: None,
+            arguments: json!({"message": "plain external input"}).to_string(),
+            call_id: "external-review-call".to_string(),
+            encrypted_content: None,
+            status: None,
+            encrypted_function_args: Some(Vec::new()),
+            internal_chat_message_metadata_passthrough: None,
+        };
+        let call = router
+            .build_tool_call(original.clone())
+            .expect("external function call should parse")
+            .expect("external function call should remain dispatchable");
+        assert_eq!(
+            call.native_call.as_deref(),
+            review_required.then_some(&original),
+        );
+        assert_eq!(call.encrypted_function_args, Some(Vec::new()));
+    }
+}
+
 #[test_case::test_case(false, false, false; "inline_catalog_direct_messages")]
 #[test_case::test_case(true, false, false; "context_catalog_direct_messages")]
 #[test_case::test_case(false, true, false; "inline_catalog_channels_only")]
@@ -2928,26 +3005,10 @@ async fn multi_agent_v2_external_provider_tools_use_plaintext_message_schemas(
                 Feature::ModelCatalogInContext,
                 model_catalog_in_context,
             );
-            let mut external_model = turn.model_info().as_ref().clone();
-            external_model.slug = "deepseek-test".to_string();
-            external_model.display_name = "DeepSeek Test".to_string();
-            external_model.visibility = ModelVisibility::List;
-            let catalog_dir = turn.config.codex_home.join("model-catalogs");
-            std::fs::create_dir_all(&catalog_dir).expect("create external model catalog directory");
-            std::fs::write(
-                catalog_dir.join("deepseek.json"),
-                serde_json::to_vec(&codex_protocol::openai_models::ModelsResponse {
-                    models: vec![external_model],
-                })
-                .expect("serialize external model catalog"),
-            )
-            .expect("write external model catalog");
+            install_external_tool_catalog(turn);
             update_config(turn, |config| {
                 config.multi_agent_v2.disable_direct_message = disable_direct_message;
                 config.multi_agent_v2.disable_native_tools = disable_native_tools;
-                config
-                    .model_providers
-                    .insert("deepseek".to_string(), config.model_provider.clone());
             });
         },
         inputs,
@@ -3096,6 +3157,11 @@ async fn tool_mode_selector_overrides_feature_flags() {
 #[tokio::test]
 async fn v1_multi_agent_tools_defer_when_tool_search_available() {
     let plan = probe(|turn| {
+        set_feature(
+            turn,
+            Feature::DeferredToolWorldState,
+            /*enabled*/ false,
+        );
         update_turn_settings_for_test(turn, |settings| {
             Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
         });

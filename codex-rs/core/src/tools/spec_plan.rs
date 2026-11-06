@@ -61,6 +61,7 @@ use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::multi_agent_tool::multi_agent_v2_handler;
 use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::NativeReview;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
@@ -1475,6 +1476,15 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 ToolExposure::Direct
             };
             let tool_namespace = turn_context.config.multi_agent_v2.tool_namespace.as_deref();
+            let native_review = if turn_context
+                .config
+                .features
+                .enabled(Feature::GuardianNativeMultiAgentHistory)
+            {
+                NativeReview::Required
+            } else {
+                NativeReview::Disabled
+            };
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
@@ -1496,7 +1506,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     .enabled(Feature::ModelCatalogInContext),
                 usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
             };
-            registry.register_trusted_with_exposure(
+            registry.register_trusted_with_native_review(
                 multi_agent_v2_handler(
                     SpawnAgentHandlerV2::new(
                         spawn_options.clone(),
@@ -1509,9 +1519,10 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     model_messages.multi_agent_tool_parameters_override("spawn_agent"),
                 ),
                 exposure,
+                native_review,
             );
             if !turn_context.config.multi_agent_v2.disable_direct_message {
-                registry.register_trusted_with_exposure(
+                registry.register_trusted_with_native_review(
                     multi_agent_v2_handler(
                         SendMessageHandlerV2,
                         tool_namespace,
@@ -1519,8 +1530,9 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         model_messages.multi_agent_tool_parameters_override("send_message"),
                     ),
                     exposure,
+                    native_review,
                 );
-                registry.register_trusted_with_exposure(
+                registry.register_trusted_with_native_review(
                     multi_agent_v2_handler(
                         FollowupTaskHandlerV2,
                         tool_namespace,
@@ -1528,6 +1540,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         model_messages.multi_agent_tool_parameters_override("followup_task"),
                     ),
                     exposure,
+                    native_review,
                 );
             }
             if turn_context.config.multi_agent_v2.wait_agent_enabled {
@@ -1541,7 +1554,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     exposure,
                 );
             }
-            registry.register_trusted_with_exposure(
+            registry.register_trusted_with_native_review(
                 multi_agent_v2_handler(
                     InterruptAgentHandler,
                     tool_namespace,
@@ -1549,6 +1562,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     model_messages.multi_agent_tool_parameters_override("interrupt_agent"),
                 ),
                 exposure,
+                native_review,
             );
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(
@@ -1568,7 +1582,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     MAX_EXTERNAL_SPAWN_AGENT_MODEL_OVERRIDES;
                 // The context catalog lists session models, not cross-provider routes.
                 external_spawn_options.model_catalog_in_context = false;
-                registry.register_trusted_with_exposure(
+                registry.register_trusted_with_native_review(
                     plaintext_external_agent_handler(
                         SpawnAgentHandlerV2::new(
                             external_spawn_options,
@@ -1578,23 +1592,26 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         "Spawn an agent using a configured external model provider. Set `model` to one of the configured external model ids; `agent_type` is optional. External-provider agents may use `fork_turns`=`all` to inherit full history across configured external providers. Legacy positive turn counts also inherit full history, not partial history. When the current agent uses OpenAI, set `fork_turns` to `none` because encrypted OpenAI history cannot cross providers.",
                     ),
                     exposure,
+                    native_review,
                 );
                 if !turn_context.config.multi_agent_v2.disable_direct_message {
-                    registry.register_trusted_with_exposure(
+                    registry.register_trusted_with_native_review(
                         plaintext_external_agent_handler(
                             SendMessageHandlerV2,
                             SEND_EXTERNAL_MESSAGE_TOOL_NAME,
                             "Queue a plaintext message for an agent that uses an external model provider.",
                         ),
                         exposure,
+                        native_review,
                     );
-                    registry.register_trusted_with_exposure(
+                    registry.register_trusted_with_native_review(
                         plaintext_external_agent_handler(
                             FollowupTaskHandlerV2,
                             FOLLOWUP_EXTERNAL_TASK_TOOL_NAME,
                             "Send a plaintext follow-up task to an agent that uses an external model provider.",
                         ),
                         exposure,
+                        native_review,
                     );
                 }
             }

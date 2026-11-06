@@ -161,9 +161,8 @@ jobs:
           CODEX_CLI_PATH="$fake_codex" node "$stage/bin/codex-dp.js" --version \
             | grep -Fx 'fake-codex --version'
       - uses: ./.github/actions/setup-ci
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # pinned action; toolchain from stable below
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          toolchain: "1.95.0"
           components: rustfmt
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
         with:
@@ -207,6 +206,7 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_routes_provider_from_model_prefix_without_agent_type
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_spawn_uses_explicit_model_route
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_external_provider_tools_use_plaintext_message_schemas
+          CARGO_BUILD_JOBS=1 just test -p codex-core --lib external_agent_native_review_preserves_original_plaintext_call --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all idle_mail_survives_eviction_and_preserves_followup_order --no-tests fail
@@ -327,9 +327,8 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version-file: .nvmrc
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # pinned action; toolchain from stable below
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          toolchain: "1.95.0"
           targets: x86_64-pc-windows-msvc
       - uses: ./.github/actions/setup-rusty-v8
         with:
@@ -400,9 +399,8 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version-file: .nvmrc
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # pinned action; toolchain from stable below
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          toolchain: "1.95.0"
           targets: aarch64-apple-darwin
       - uses: ./.github/actions/setup-rusty-v8
         with:
@@ -440,9 +438,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # pinned action; toolchain from stable below
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          toolchain: "1.95.0"
           targets: x86_64-unknown-linux-musl
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:

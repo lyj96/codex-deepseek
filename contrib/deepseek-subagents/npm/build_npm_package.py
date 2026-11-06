@@ -74,7 +74,9 @@ def stage_package(
         shutil.copy2(SCRIPT_DIR / "bin" / filename, bin_dir / filename)
     package_json = root_package_json(version)
 
-    with (staging_dir / "package.json").open("w", encoding="utf-8") as output:
+    with (staging_dir / "package.json").open(
+        "w", encoding="utf-8", newline="\n"
+    ) as output:
         json.dump(package_json, output, indent=2)
         output.write("\n")
 
