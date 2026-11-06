@@ -103,11 +103,14 @@ jobs:
         include:
           - name: Linux
             runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
           - name: macOS
             runner: macos-15
+            target: aarch64-apple-darwin
           - name: Windows
             runner: windows-2025
             runs_on: windows-2025
+            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -115,7 +118,7 @@ jobs:
       - name: Run argument comment lint on codex-rs via Bazel
         uses: ./.github/actions/run-argument-comment-lint
         with:
-          target: ${{ runner.os }}
+          target: ${{ matrix.target }}
 
   # --- CI to validate on different os/targets --------------------------------
   cargo_voice_inputs:
@@ -136,13 +139,9 @@ jobs:
           - { target: x86_64-apple-darwin, runner: macos-15-intel }
           - { target: aarch64-apple-darwin, runner: macos-15 }
           - target: x86_64-pc-windows-msvc
-            runner:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
+            runner: windows-2025
           - target: aarch64-pc-windows-msvc
-            runner:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
+            runner: windows-11-arm
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -155,7 +154,7 @@ jobs:
     needs: cargo_voice_inputs
     if: &lint_build_if ${{ !cancelled() }}
     name: &lint_build_name Lint/Build — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
-    runs-on: &lint_build_runner ${{ matrix.runs_on || matrix.runner }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: &lint_build_timeout 30
     defaults: &lint_build_defaults
       run:
@@ -449,7 +448,7 @@ jobs:
   lint_build_musl:
     if: *lint_build_if
     name: *lint_build_name
-    runs-on: *lint_build_runner
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: *lint_build_timeout
     defaults: *lint_build_defaults
     env: *lint_build_env
@@ -460,27 +459,19 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-x64
+            runs_on: ubuntu-24.04
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-arm64
+            runs_on: ubuntu-24.04-arm
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-x64
+            runs_on: ubuntu-24.04
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-arm64
+            runs_on: ubuntu-24.04-arm
     steps: *lint_build_steps
 
   tests_macos_aarch64:
