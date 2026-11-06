@@ -120,7 +120,7 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             archive_ext: zip
-          - runner: macos-15
+          - runner: macos-latest
             target: aarch64-apple-darwin
             archive_ext: tar.gz
           - runner: ubuntu-24.04
@@ -181,7 +181,10 @@ jobs:
       - if: runner.os == 'macOS'
         name: Validate macOS installer
         shell: bash
-        run: bash -n contrib/deepseek-subagents/install-macos.sh
+        run: |
+          test "$(uname -m)" = arm64
+          rustc -vV | grep -Fx 'host: aarch64-apple-darwin'
+          bash -n contrib/deepseek-subagents/install-macos.sh
       - if: runner.os == 'Linux'
         name: Validate Linux installer
         shell: bash

@@ -388,7 +388,7 @@ jobs:
           }
 
   macos-release-compile:
-    runs-on: macos-15
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -406,6 +406,11 @@ jobs:
       - uses: ./.github/actions/setup-rusty-v8
         with:
           target: aarch64-apple-darwin
+      - name: Verify Apple Silicon compiler host
+        working-directory: codex-rs
+        run: |
+          test "$(uname -m)" = arm64
+          rustc -vV | grep -Fx 'host: aarch64-apple-darwin'
       - name: Check Apple Silicon release binaries
         working-directory: codex-rs
         run: >-
