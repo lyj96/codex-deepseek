@@ -880,7 +880,7 @@ async fn static_manager_keeps_provider_catalog_over_config_catalog() {
 
     assert_eq!(model_info.display_name, "DeepSeek V4 Pro");
     assert!(model_info.supports_image_detail_original);
-    assert!(!model_info.used_fallback_model_metadata);
+    assert_eq!(model_info.origin, ModelOrigin::ExplicitConfig);
 }
 
 #[tokio::test]
@@ -903,7 +903,6 @@ async fn openai_manager_prefers_config_catalog_over_remote_catalog() {
 
     assert_eq!(model_info.display_name, "DeepSeek V4 Pro");
     assert!(model_info.supports_image_detail_original);
-    assert!(!model_info.used_fallback_model_metadata);
     assert_eq!(model_info.origin, ModelOrigin::ExplicitConfig);
 }
 
