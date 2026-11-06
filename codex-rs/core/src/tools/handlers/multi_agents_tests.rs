@@ -126,6 +126,7 @@ fn invocation(
             crate::tools::context::ToolCallSource::Direct
         },
         payload,
+        native_call: None,
         environments: Default::default(),
     }
 }
@@ -239,7 +240,7 @@ async fn install_deepseek_provider_with_catalog(turn: &mut TurnContext) {
         .await
         .expect("external model catalog directory should be created");
 
-    let mut flash_model = turn.model_info().as_ref().clone();
+    let mut flash_model = turn.model_info().model.as_ref().clone();
     flash_model.slug = "deepseek-flash".to_string();
     flash_model.display_name = "DeepSeek Flash".to_string();
     flash_model.description = Some("Fast external coding model".to_string());
@@ -276,7 +277,7 @@ async fn install_qwen_provider_with_catalog(turn: &mut TurnContext) {
         .await
         .expect("external model catalog directory should be created");
 
-    let mut model = turn.model_info().as_ref().clone();
+    let mut model = turn.model_info().model.as_ref().clone();
     model.slug = "qwen-flash".to_string();
     model.display_name = "Qwen Flash".to_string();
     model.description = Some("Fast external coding model".to_string());

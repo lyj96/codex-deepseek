@@ -12,6 +12,8 @@ use crate::manager::RefreshStrategy;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::error::CodexErr;
+use codex_protocol::openai_models::CatalogModel;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::openai_models::ModelsResponse;
 
 #[tokio::test]
@@ -36,13 +38,10 @@ async fn configured_catalog_keeps_exact_metadata_after_discovery_failures() {
     ]);
     let manager = OpenAiModelsManager::new_without_cache(endpoint, /*auth_manager*/ None)
         .with_provider_catalog();
-    let expected = crate::model_info::with_config_overrides(
-        codex_protocol::openai_models::ModelInfo {
-            used_fallback_model_metadata: false,
-            ..configured
-        },
-        &config,
-    );
+    let expected = CatalogModel {
+        model: crate::model_info::with_config_overrides(configured, &config).into(),
+        origin: ModelOrigin::ExplicitConfig,
+    };
     for _ in 0..3 {
         manager
             .raw_model_catalog(
@@ -57,10 +56,14 @@ async fn configured_catalog_keeps_exact_metadata_after_discovery_failures() {
         let unknown = "provider-model-unlisted";
         assert_eq!(
             manager.get_model_info(unknown, &config).await,
-            crate::model_info::with_config_overrides(
-                crate::model_info::model_info_from_slug(unknown),
-                &config,
-            )
+            CatalogModel {
+                model: crate::model_info::with_config_overrides(
+                    crate::model_info::model_info_from_slug(unknown),
+                    &config,
+                )
+                .into(),
+                origin: ModelOrigin::Synthetic,
+            }
         );
     }
     assert!(manager.get_remote_models().await.is_empty());
