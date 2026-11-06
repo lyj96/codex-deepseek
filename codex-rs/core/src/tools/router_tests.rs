@@ -127,6 +127,7 @@ fn external_agent_tools_are_routed_as_redacted_plaintext() {
                 arguments: json!({"message": "secret message"}).to_string(),
             },
             encrypted_function_args: None,
+            native_call: None,
         };
         assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
     }
