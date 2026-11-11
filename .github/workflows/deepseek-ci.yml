@@ -196,6 +196,8 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-mcp --lib connection_pool::tests --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib model_catalog
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::scenarios::incremental_tools --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::base_instructions --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::spawn_agent_description
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all model_catalog_refresh_preserves_tools_and_history
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib provider
