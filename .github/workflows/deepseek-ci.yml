@@ -179,7 +179,7 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
           CARGO_BUILD_JOBS=1 cargo build --locked \
-            --bin codex-code-mode-host --bin codex-exec --bin exec-server --bin codex-exec-server --bin bwrap
+            --bin codex-code-mode-host --bin codex-exec --bin exec-server --bin codex-exec-server --bin bwrap --bin test_stdio_server
           "${CARGO_TARGET_DIR:-target}/debug/bwrap" --version
       - name: Test external provider routing
         working-directory: codex-rs
