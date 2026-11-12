@@ -2,7 +2,7 @@
 source: cli/tests/doctor_enterprise_network.rs
 expression: stdout
 ---
-Codex Doctor v0.167.1
+Codex Doctor v0.167.2
 
 Configuration
   [ok] config       loaded
