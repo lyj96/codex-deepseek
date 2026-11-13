@@ -6,7 +6,6 @@ mod fake_bwrap;
 #[path = "capability_discovery/mount_watch.rs"]
 mod mount_watch;
 
-#[cfg(target_os = "linux")]
 use anyhow::Context as _;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -1100,7 +1099,9 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
     };
     #[cfg(not(target_os = "linux"))]
     let mut server = exec_server().await?;
-    initialize(&mut server).await?;
+    initialize(&mut server)
+        .await
+        .context("initialize shared-sandbox discovery server")?;
     let response = discover_roots(
         &mut server,
         vec![
@@ -1116,7 +1117,8 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
             },
         ],
     )
-    .await?;
+    .await
+    .context("discover shared-permission roots in one batch")?;
     assert_eq!(
         response
             .roots
@@ -1172,7 +1174,8 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
                 },
             ],
         )
-        .await?;
+        .await
+        .context("discover fallback roots after injected batch-helper failure")?;
         assert_eq!(
             fallback
                 .roots
@@ -1188,7 +1191,9 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
 
         server.shutdown().await?;
         server = exec_server().await?;
-        initialize(&mut server).await?;
+        initialize(&mut server)
+            .await
+            .context("initialize real-sandbox discovery server")?;
     }
 
     let read_first_root = FileSystemSandboxEntry::new(
@@ -1232,7 +1237,8 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
             },
         ],
     )
-    .await?;
+    .await
+    .context("discover separately restricted roots without merging permissions")?;
     assert_eq!(
         response
             .roots

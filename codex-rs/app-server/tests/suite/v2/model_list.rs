@@ -337,6 +337,7 @@ wire_api = "responses"
                 limit: Some(100),
                 cursor: None,
                 include_hidden: Some(true),
+                model_provider: None,
             },
         })
         .await?;

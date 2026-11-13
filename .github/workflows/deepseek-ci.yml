@@ -229,6 +229,9 @@ jobs:
         run: |
           CARGO_BUILD_JOBS=1 just test -p codex-app-server-transport --lib daemon_recovery --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::daemon_update_recovery --no-tests fail --retries 0
+      - name: Test executor capability sandbox isolation
+        working-directory: codex-rs
+        run: CARGO_BUILD_JOBS=1 just test -p codex-exec-server --test capability_discovery sandboxed_discovery_ --no-tests fail --retries 0
       - name: Test stable attached forks, MCP cancellation and API errors
         working-directory: codex-rs
         run: |

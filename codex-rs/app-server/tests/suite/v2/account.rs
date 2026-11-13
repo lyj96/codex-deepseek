@@ -3626,6 +3626,7 @@ async fn managed_external_default_preserves_desktop_account(signed_in: bool) -> 
     assert_eq!(
         read_account(&mut mcp).await?,
         GetAccountResponse {
+            user_id: None,
             workspace_routing: None,
             account: signed_in.then(|| Account::Chatgpt {
                 email: Some("user@example.com".to_string()),
