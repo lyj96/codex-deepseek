@@ -128,10 +128,10 @@ impl FileSystemSandboxRunner {
                 NetworkSandboxPolicy::Restricted,
             );
             codex_sandboxing::resolve_windows_restricted_token_filesystem_overrides(
-                SandboxType::WindowsRestrictedToken,
+                codex_sandboxing::SandboxType::WindowsRestrictedToken,
                 &caller_profile,
                 &cwd.native,
-                WindowsSandboxLevel::RestrictedToken,
+                codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken,
             )
             .map_err(|err| invalid_request(format!("failed to prepare fs sandbox: {err}")))?;
         }

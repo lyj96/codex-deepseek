@@ -185,6 +185,7 @@ jobs:
         working-directory: codex-rs
         run: |
           CARGO_BUILD_JOBS=1 just test -p codex-cli --bin codex provider_cmd::tests
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server-protocol --lib schema_fixtures_tests --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server --lib config_manager:: --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::catalog_provider_admission --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::model_provider_enforcement --no-tests fail --retries 0

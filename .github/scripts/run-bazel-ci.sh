@@ -383,8 +383,16 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
     # Reuse the verified native audio inputs for local CI's voice targets.
     # These fixed values must be visible during Starlark analysis as well
     # as action execution; inherited --action_env values are insufficient.
-    : "${VOICE_WINDOWS_SYSTEM_ROOT:?Windows SystemRoot is required}"
-    : "${VOICE_WINDOWS_HOST_ARCH:?Windows host architecture is required}"
+    windows_system_root="${VOICE_WINDOWS_SYSTEM_ROOT:-${SystemRoot:-${SYSTEMROOT:-}}}"
+    windows_host_arch="${VOICE_WINDOWS_HOST_ARCH:-${PROCESSOR_ARCHITECTURE:-}}"
+    if [[ -z "$windows_system_root" ]]; then
+      echo "SystemRoot must be set for Windows Bazel CI." >&2
+      exit 1
+    fi
+    if [[ -z "$windows_host_arch" ]]; then
+      echo "PROCESSOR_ARCHITECTURE must be set for Windows Bazel CI." >&2
+      exit 1
+    fi
     # GNU-host lint jobs still need the LLVM linker for their build tools.
     if [[ $windows_msvc_host_platform -eq 1 ]]; then
       post_config_bazel_args+=("--config=ci-windows-msvc")
@@ -395,10 +403,10 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
       "--repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1"
       "--inject_repository=voice_windows_tools=${VOICE_WINDOWS_BAZEL_REPOSITORY}"
       "--//third_party/voice:windows_installed_tools=@voice_windows_tools//:tools"
-      "--action_env=SystemRoot=${VOICE_WINDOWS_SYSTEM_ROOT}"
-      "--host_action_env=SystemRoot=${VOICE_WINDOWS_SYSTEM_ROOT}"
-      "--action_env=PROCESSOR_ARCHITECTURE=${VOICE_WINDOWS_HOST_ARCH}"
-      "--host_action_env=PROCESSOR_ARCHITECTURE=${VOICE_WINDOWS_HOST_ARCH}"
+      "--action_env=SystemRoot=${windows_system_root}"
+      "--host_action_env=SystemRoot=${windows_system_root}"
+      "--action_env=PROCESSOR_ARCHITECTURE=${windows_host_arch}"
+      "--host_action_env=PROCESSOR_ARCHITECTURE=${windows_host_arch}"
     )
   fi
 
