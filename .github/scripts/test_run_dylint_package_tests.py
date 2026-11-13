@@ -135,7 +135,7 @@ class GitEnvironmentTests(unittest.TestCase):
             with self.subTest(environment=environment), self.assertRaises(ValueError):
                 runner.git_environment(environment, Path(__file__).resolve().parent)
 
-    def test_real_legacy_clone_uses_only_the_private_pinned_history(self):
+    def test_real_clone_uses_both_private_pinned_branch_names(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             original = root / "original"
@@ -155,7 +155,7 @@ class GitEnvironmentTests(unittest.TestCase):
                     ["git", *args], env=environment, text=True
                 ).strip()
 
-            git("init", "--quiet", "--initial-branch=master", str(original))
+            git("init", "--quiet", "--initial-branch=main", str(original))
             (original / "rust-toolchain.toml").write_text(
                 '[toolchain]\nchannel = "nightly-2026-08-20"\n'
             )
@@ -174,6 +174,7 @@ class GitEnvironmentTests(unittest.TestCase):
             )
             revision = git("-C", str(original), "rev-parse", "HEAD")
             tree = git("-C", str(original), "rev-parse", "HEAD^{tree}")
+            git("-C", str(original), "update-ref", "refs/heads/master", revision)
             git("clone", "--quiet", "--bare", str(original), str(mirror))
             child = runner.git_environment(environment, mirror)
             runner.checked(

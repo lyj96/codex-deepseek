@@ -1,8 +1,8 @@
 """Run the original Dylint package tests with its immutable Clippy history.
 
-Dylint 6.1 resolves a legacy `master` branch while building its driver. Provide
-that name in a private mirror of the revision already pinned by this package,
-without changing dependencies, tests, or the user's Git configuration.
+Dylint 6.3 resolves `main` while building its driver. Provide that name and the
+legacy `master` alias in a private mirror of the revision already pinned by this
+package, without changing dependencies, tests, or the user's Git configuration.
 """
 
 import argparse
@@ -100,7 +100,8 @@ def checked(args: list[str], *, environment=None, capture=False) -> str:
 def verify_clone(clone: Path, pins: Pins, tree: str, environment) -> None:
     for ref, expected in (
         ("HEAD", pins.revision),
-        ("master", pins.revision),
+        ("main", pins.revision),
+        ("origin/master", pins.revision),
         ("HEAD^{tree}", tree),
     ):
         if (
@@ -133,15 +134,19 @@ def prepare(cache: Path, pins: Pins, environment: dict[str, str]):
             "--quiet",
             "--no-tags",
             CLIPPY_URL,
-            f"{pins.revision}:refs/heads/master",
+            f"{pins.revision}:refs/heads/main",
         ]
     )
-    checked(["git", "-C", str(mirror), "symbolic-ref", "HEAD", "refs/heads/master"])
-    if (
-        checked(["git", "-C", str(mirror), "rev-parse", "master"], capture=True)
-        != pins.revision
-    ):
-        raise ValueError("Clippy mirror revision mismatch")
+    checked(
+        ["git", "-C", str(mirror), "update-ref", "refs/heads/master", pins.revision]
+    )
+    checked(["git", "-C", str(mirror), "symbolic-ref", "HEAD", "refs/heads/main"])
+    for ref in ("main", "master"):
+        if (
+            checked(["git", "-C", str(mirror), "rev-parse", ref], capture=True)
+            != pins.revision
+        ):
+            raise ValueError("Clippy mirror revision mismatch")
     if (
         checked(
             ["git", "-C", str(mirror), "rev-parse", "--is-shallow-repository"],
@@ -156,9 +161,7 @@ def prepare(cache: Path, pins: Pins, environment: dict[str, str]):
     )
     if tomllib.loads(toolchain)["toolchain"]["channel"] != pins.nightly:
         raise ValueError("Pinned Clippy revision and lint nightly differ")
-    tree = checked(
-        ["git", "-C", str(mirror), "rev-parse", "master^{tree}"], capture=True
-    )
+    tree = checked(["git", "-C", str(mirror), "rev-parse", "main^{tree}"], capture=True)
     child = git_environment(environment, mirror)
     probe = cache / "clone-probe"
     checked(["git", "clone", "--quiet", CLIPPY_URL, str(probe)], environment=child)
