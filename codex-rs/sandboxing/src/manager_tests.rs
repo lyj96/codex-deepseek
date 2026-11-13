@@ -761,6 +761,13 @@ fn wrapper_runtime_selection_uses_the_parent_not_environment_overrides() {
 #[cfg(target_os = "windows")]
 #[test]
 fn transform_for_direct_spawn_windows_materializes_inner_helper() {
+    let helpers = ["codex-command-runner", "codex-windows-sandbox-setup"]
+        .map(|name| codex_utils_cargo_bin::cargo_bin(name).expect("built Windows sandbox helper"));
+    let _accounts =
+        codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire_with_helpers(
+            &helpers,
+        )
+        .expect("prepare Windows sandbox test helpers and account lock");
     let codex_home = tempfile::TempDir::new().expect("codex home");
     let helper_dir = tempfile::TempDir::new().expect("helper dir");
     let configured_helper = helper_dir.path().join("configured-codex-helper.exe");

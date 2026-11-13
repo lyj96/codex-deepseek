@@ -4928,6 +4928,7 @@ dependencies = [
  "codex-utils-path-uri",
  "codex-utils-pty",
  "codex-windows-sandbox",
+ "codex-windows-sandbox-test-support",
  "dunce",
  "libc",
  "pretty_assertions",

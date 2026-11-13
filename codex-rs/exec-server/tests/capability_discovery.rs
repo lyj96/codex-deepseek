@@ -1193,7 +1193,9 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
                 ("fallback-second".to_string(), 1, None),
             ]
         );
-        assert!(std::fs::read_to_string(&launch_log)?.lines().count() > 2);
+        let fallback_launch_count = std::fs::read_to_string(&launch_log)?.lines().count();
+        assert!(fallback_launch_count > 2);
+        assert_eq!(fallback_launch_count, 4);
 
         server.shutdown().await?;
         server = exec_server().await?;

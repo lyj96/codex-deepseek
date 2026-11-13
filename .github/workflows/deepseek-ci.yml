@@ -402,11 +402,13 @@ jobs:
         working-directory: codex-rs
         shell: pwsh
         env:
+          CODEX_HOME: ${{ runner.temp }}/sandbox-compatibility-home
           LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_INCREMENTAL: "0"
           CARGO_BUILD_JOBS: "2"
         run: |
+          New-Item -ItemType Directory -Path $env:CODEX_HOME -Force | Out-Null
           cargo build --locked --target x86_64-pc-windows-msvc --bin codex-command-runner --bin codex-windows-sandbox-setup
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           just test -p codex-exec-server --lib --locked --target x86_64-pc-windows-msvc `

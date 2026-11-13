@@ -613,6 +613,18 @@ mod tests {
     use super::helper_read_roots;
     use super::sandbox_cwd;
 
+    #[cfg(windows)]
+    fn prepare_windows_sandbox_test()
+    -> codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard {
+        let helpers = ["codex-command-runner", "codex-windows-sandbox-setup"].map(|name| {
+            codex_utils_cargo_bin::cargo_bin(name).expect("built Windows sandbox helper")
+        });
+        codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire_with_helpers(
+            &helpers,
+        )
+        .expect("prepare Windows sandbox test helpers and account lock")
+    }
+
     #[test]
     fn helper_permissions_enable_minimal_reads_for_restricted_profile() {
         let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
@@ -755,6 +767,8 @@ mod tests {
 
     #[test]
     fn sandbox_exec_request_carries_helper_env() {
+        #[cfg(windows)]
+        let _accounts = prepare_windows_sandbox_test();
         let Some((path_key, path)) = std::env::vars_os().find(|(key, _)| {
             let key = key.to_string_lossy();
             key == "PATH" || (cfg!(windows) && key.eq_ignore_ascii_case("PATH"))
@@ -818,6 +832,8 @@ mod tests {
     /// Removing the selected directory must not change permission anchoring or prevent launch.
     #[test]
     fn sandbox_exec_request_uses_filesystem_root_and_preserves_policy_cwd() {
+        #[cfg(windows)]
+        let _accounts = prepare_windows_sandbox_test();
         let codex_self_exe = std::env::current_exe().expect("current exe");
         let runtime_paths =
             ExecServerRuntimeOptions::new(codex_self_exe.clone(), Some(codex_self_exe))
@@ -914,6 +930,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn sandbox_exec_request_binds_windows_relative_globs_to_policy_cwd() {
+        let _accounts = prepare_windows_sandbox_test();
         let codex_self_exe = std::env::current_exe().expect("current exe");
         let runtime_paths =
             ExecServerRuntimeOptions::new(codex_self_exe, /*codex_linux_sandbox_exe*/ None)

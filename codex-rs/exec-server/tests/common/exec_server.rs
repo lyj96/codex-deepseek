@@ -78,38 +78,15 @@ pub(crate) fn test_codex_helper_paths() -> anyhow::Result<TestCodexHelperPaths> 
 #[cfg(windows)]
 pub(crate) fn prepare_windows_sandbox_test()
 -> anyhow::Result<codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard> {
-    use anyhow::Context;
-
-    static HELPERS_STAGED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-
-    let guard = codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire()?;
-    if HELPERS_STAGED.get().is_some() {
-        return Ok(guard);
-    }
-    // The RPC server re-enters this test executable. Cargo and Bazel supply its
-    // elevated helper binaries separately, so stage them in the supported layout.
-    let executable = std::env::current_exe()?;
-    let resources = executable
-        .parent()
-        .context("Windows test executable should have a parent directory")?
-        .join("codex-resources");
-    if let Err(error) = std::fs::create_dir_all(&resources)
-        && !(error.kind() == std::io::ErrorKind::PermissionDenied && resources.is_dir())
-    {
-        return Err(error).context("create Windows sandbox test resources");
-    }
-    for name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
-        let source = codex_utils_cargo_bin::cargo_bin(name)?;
-        let destination = resources.join(std::path::Path::new(name).with_extension("exe"));
-        if let Err(error) = codex_utils_cargo_bin::copy_executable(&source, &destination)
-            && !(error.kind() == std::io::ErrorKind::PermissionDenied && destination.is_file())
-        {
-            return Err(error).with_context(|| format!("stage Windows sandbox helper {name}"));
-        }
-    }
-    // Account locking serializes staging; cache only a completely successful copy.
-    let _ = HELPERS_STAGED.set(());
-    Ok(guard)
+    let helpers = ["codex-command-runner", "codex-windows-sandbox-setup"]
+        .into_iter()
+        .map(codex_utils_cargo_bin::cargo_bin)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(
+        codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard::acquire_with_helpers(
+            &helpers,
+        )?,
+    )
 }
 
 pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
