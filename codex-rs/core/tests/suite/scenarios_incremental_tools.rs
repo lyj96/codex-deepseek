@@ -7,6 +7,7 @@ use codex_core::compact::AutoCompactionDisabled;
 use codex_features::Feature;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
+use codex_model_provider_info::GCP_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
@@ -151,23 +152,31 @@ async fn prediction_fork_keeps_inherited_tools() -> Result<()> {
     Ok(())
 }
 
-#[test_case(true, None, true, OPENAI_PROVIDER_ID, false; "responses_lite")]
-#[test_case(true, Some(true), true, OPENAI_PROVIDER_ID, false; "announcements_suppressed")]
-#[test_case(false, None, false, OPENAI_PROVIDER_ID, false; "responses_api")]
-#[test_case(false, None, false, OPENAI_PROVIDER_ID, true; "responses_api_ignores_legacy_opt_in")]
-#[test_case(false, None, false, "deepseek", true; "deepseek_ignores_legacy_opt_in")]
-#[test_case(false, None, false, "custom-provider", true; "custom_provider_ignores_legacy_opt_in")]
-#[test_case(false, None, false, AMAZON_BEDROCK_PROVIDER_ID, false; "mantle_provider_id")]
-#[test_case(false, None, true, AMAZON_BEDROCK_PROVIDER_ID, true; "mantle_provider_id_incremental")]
-#[test_case(false, None, false, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, false; "runtime_provider_id")]
-#[test_case(false, None, true, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, true; "runtime_provider_id_incremental")]
+#[test_case(true, None, true, OPENAI_PROVIDER_ID, &[]; "responses_lite")]
+#[test_case(true, Some(true), true, OPENAI_PROVIDER_ID, &[]; "announcements_suppressed")]
+#[test_case(false, None, false, OPENAI_PROVIDER_ID, &[]; "responses_api")]
+#[test_case(false, None, false, OPENAI_PROVIDER_ID,
+    &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, true)]; "responses_api_ignores_legacy_opt_in")]
+#[test_case(false, None, false, "deepseek",
+    &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, true)]; "deepseek_ignores_legacy_opt_in")]
+#[test_case(false, None, false, "custom-provider",
+    &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, true)]; "custom_provider_ignores_legacy_opt_in")]
+#[test_case(false, None, false, AMAZON_BEDROCK_PROVIDER_ID, &[]; "mantle_default")]
+#[test_case(false, None, true, AMAZON_BEDROCK_PROVIDER_ID,
+    &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, false)]; "mantle_enabled")]
+#[test_case(false, None, false, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, &[]; "runtime_default")]
+#[test_case(false, None, true, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
+    &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, false)]; "runtime_enabled")]
+#[test_case(false, None, true, GCP_PROVIDER_ID, &[]; "gcp_default")]
+#[test_case(false, None, false, GCP_PROVIDER_ID,
+    &[(Feature::IncrementalToolsLegacyGcp, false), (Feature::IncrementalToolsLegacy, true)]; "gcp_opt_out")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn incremental_tools_append_changed_catalog_without_rewriting_history(
     use_responses_lite: bool,
     suppress_model_change_announcements: Option<bool>,
     incremental_tools: bool,
     provider_id: &'static str,
-    legacy_opt_in: bool,
+    feature_overrides: &'static [(Feature, bool)],
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -215,15 +224,11 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
         })
         .with_config(move |config| {
             config.model_provider_id = provider_id.to_string();
-            if !use_responses_lite && legacy_opt_in {
+            for &(feature, enabled) in feature_overrides {
                 config
                     .features
-                    .disable(Feature::IncrementalTools)
-                    .expect("disable the Lite flag");
-                config
-                    .features
-                    .enable(Feature::IncrementalToolsLegacy)
-                    .expect("enable incremental tools on regular Responses");
+                    .set_enabled(feature, enabled)
+                    .expect("configure independent provider flags");
             }
             if let Some(suppress) = suppress_model_change_announcements {
                 config
@@ -512,6 +517,7 @@ async fn tool_removal_appends_a_standalone_notice_without_rewriting_history(
                     removed_namespaces_header: Some("Unavailable namespaces:".to_string()),
                     namespace_instructions_prefix: Some("Catalog {name}: ".to_string()),
                     namespace_instructions_cleared: Some("Cleared {name}.".to_string()),
+                    ..Default::default()
                 });
             }
         })

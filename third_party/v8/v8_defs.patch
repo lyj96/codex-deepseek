@@ -16,7 +16,8 @@ diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bz
 
 +load("@@//third_party/v8:snapshot_platform.bzl", "V8SnapshotPlatformInfo")
  load("@rules_cc//cc:cc_library.bzl", "cc_library")
- load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+-load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
++load("@@//third_party/v8:binary.bzl", cc_binary = "v8_cc_binary")
  load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 @@ -19,7 +20,7 @@
 

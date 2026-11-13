@@ -166,6 +166,10 @@ impl ConfigManager {
         self.loader_overrides.user_config_path(self.codex_home())
     }
 
+    pub(crate) fn loader_overrides(&self) -> &LoaderOverrides {
+        &self.loader_overrides
+    }
+
     pub(crate) fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {
         self.cli_overrides
             .read()
@@ -534,7 +538,7 @@ impl ConfigManager {
         &self,
         saved_provider: Option<&str>,
         request_overrides: Option<HashMap<String, serde_json::Value>>,
-        typesafe_overrides: ConfigOverrides,
+        mut typesafe_overrides: ConfigOverrides,
         cwd: Option<PathBuf>,
     ) -> std::io::Result<Config> {
         let requested_provider = typesafe_overrides.model_provider.clone().or_else(|| {
@@ -544,6 +548,9 @@ impl ConfigManager {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
         });
+        if let Some(saved) = saved_provider {
+            typesafe_overrides.model_provider = Some(saved.to_owned());
+        }
         // Resolve the selection before the saved provider is applied as a resume override.
         let current_config = self
             .load_latest_config(typesafe_overrides.cwd.clone().or_else(|| cwd.clone()))
@@ -558,6 +565,7 @@ impl ConfigManager {
                 |config, _overrides, layers| {
                     let requested_provider = requested_provider
                         .as_deref()
+                        .or(saved_provider)
                         .or(config.model_provider.as_deref())
                         .unwrap_or("openai");
                     // Validate the saved route even when a client sends a provider override.
@@ -754,7 +762,7 @@ impl ConfigManager {
             cwd,
             &self.current_cli_overrides(),
             codex_config::ConfigLoadOptions {
-                loader_overrides: self.loader_overrides.clone(),
+                loader_overrides: self.loader_overrides().clone(),
                 strict_config: self.strict_config,
                 cloud_config_bundle: policy_load.cloud_config.clone(),
             },
