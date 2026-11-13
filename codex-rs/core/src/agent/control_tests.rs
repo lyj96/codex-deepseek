@@ -1339,7 +1339,14 @@ async fn encrypted_agent_message_cannot_cross_to_external_provider(
             .await
             .expect("child should be loaded");
         persist_thread_for_tree_resume(&thread, "child persisted before eviction").await;
+        let (config, ..) = thread.session.fork_config().await;
         let environments = EvictedEnvironments {
+            config: Arc::new(config),
+            has_independent_service_tier: matches!(
+                &thread.session.agent_runtime,
+                crate::agent::host::AgentRuntimeServices::Host(services)
+                    if services.service_tier.is_none()
+            ),
             selections: thread.environment_selections().await,
             bindings: thread
                 .session

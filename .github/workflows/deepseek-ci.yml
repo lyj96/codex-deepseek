@@ -398,6 +398,29 @@ jobs:
           if (Select-String -LiteralPath $log -Pattern '^\s*LEAK\s|\b[1-9][0-9]* leaky\b' -Quiet) {
             throw 'Provider shutdown still leaves a leaked process or handle'
           }
+      - name: Test Windows sandbox compatibility and watcher timing
+        working-directory: codex-rs
+        shell: pwsh
+        env:
+          LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "2"
+        run: |
+          cargo build --locked --target x86_64-pc-windows-msvc --bin codex-command-runner --bin codex-windows-sandbox-setup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-exec-server --lib --locked --target x86_64-pc-windows-msvc `
+            -E 'test(=fs_sandbox::tests::sandbox_exec_request_carries_helper_env) | test(=fs_sandbox::tests::sandbox_exec_request_uses_filesystem_root_and_preserves_policy_cwd) | test(=fs_sandbox::tests::sandbox_exec_request_binds_windows_relative_globs_to_policy_cwd)' `
+            --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-sandboxing --lib --locked --target x86_64-pc-windows-msvc transform_for_direct_spawn_windows_materializes_inner_helper --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-file-watcher --lib --locked --target x86_64-pc-windows-msvc `
+            -E 'test(=tests::throttled_receiver_coalesces_within_interval) | test(=tests::debounced_receiver_coalesces_each_event_batch)' `
+            --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-exec-server --test capability_discovery --locked --target x86_64-pc-windows-msvc executor_legacy_missing_or_null_sandbox_cwd_keeps_absolute_requests_working --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   macos-release-compile:
     runs-on: macos-latest

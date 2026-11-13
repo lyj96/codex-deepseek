@@ -232,6 +232,8 @@ async fn discovers_cursor_plugin_without_reading_default_mcp_for_inline_servers(
 #[tokio::test]
 async fn executor_legacy_missing_or_null_sandbox_cwd_keeps_absolute_requests_working()
 -> anyhow::Result<()> {
+    #[cfg(windows)]
+    let _sandbox_account_guard = common::exec_server::prepare_windows_sandbox_test()?;
     let workspace = tempfile::tempdir()?;
     std::fs::write(workspace.path().join("note.txt"), b"contents")?;
     write_file(
@@ -258,7 +260,11 @@ async fn executor_legacy_missing_or_null_sandbox_cwd_keeps_absolute_requests_wor
         PermissionProfile::from_runtime_permissions(&process_policy, NetworkSandboxPolicy::Enabled),
         cwd.clone(),
     );
-    process_sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+    process_sandbox.windows_sandbox_selection = if cfg!(windows) {
+        WindowsSandboxSelection::Elevated
+    } else {
+        WindowsSandboxSelection::RestrictedToken
+    };
     let sandbox =
         FileSystemSandboxContext::from_permission_profile(PermissionProfile::Disabled, cwd.clone());
     let requests = [

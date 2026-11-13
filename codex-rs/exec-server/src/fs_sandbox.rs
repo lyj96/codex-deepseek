@@ -798,8 +798,7 @@ mod tests {
                 "filesystem sandbox cannot be enforced on this executor"
             );
             crate::FileSystemSandboxContext {
-                windows_sandbox_selection:
-                    codex_file_system::WindowsSandboxSelection::RestrictedToken,
+                windows_sandbox_selection: codex_file_system::WindowsSandboxSelection::Elevated,
                 ..sandbox_context
             }
         };
@@ -836,7 +835,7 @@ mod tests {
         sandbox_context.sandbox_override = SandboxOverride::EscalatedSandboxWithRestrictions;
         #[cfg(windows)]
         let sandbox_context = crate::FileSystemSandboxContext {
-            windows_sandbox_selection: codex_file_system::WindowsSandboxSelection::RestrictedToken,
+            windows_sandbox_selection: codex_file_system::WindowsSandboxSelection::Elevated,
             ..sandbox_context
         };
         selected.close().expect("remove selected directory");
@@ -938,7 +937,7 @@ mod tests {
             ),
         ]);
         let sandbox_context = crate::FileSystemSandboxContext {
-            windows_sandbox_selection: codex_file_system::WindowsSandboxSelection::RestrictedToken,
+            windows_sandbox_selection: codex_file_system::WindowsSandboxSelection::Elevated,
             ..sandbox_context_with_cwd(&policy, cwd_uri)
         };
         selected.close().expect("remove selected directory");

@@ -57,7 +57,7 @@ fn reconstruct_rollout_uses_recipient_projection_without_changing_sender_evidenc
     let projected = ContextManager::reconstruct_rollout(
         &rollout,
         ThreadHistoryMode::Legacy,
-        ContextManager::new(),
+        ContextManager::new(uuid_v7_item_id_generator_for_test()),
         TruncationPolicy::Bytes(4096),
         |communication| {
             crate::agent_communication::model_input_item_for_provider(communication, provider_id)
@@ -100,7 +100,7 @@ fn reconstruct_rollout_uses_recipient_projection_without_changing_sender_evidenc
     let evidence = ContextManager::reconstruct_rollout(
         &rollout,
         ThreadHistoryMode::Legacy,
-        ContextManager::new(),
+        ContextManager::new(uuid_v7_item_id_generator_for_test()),
         TruncationPolicy::Bytes(0),
         InterAgentCommunication::to_model_input_item,
     );

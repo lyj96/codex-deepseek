@@ -832,7 +832,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                         sandbox_policy_cwd: policy_cwd,
                         sandbox_exe: Some(configured_helper.as_path()),
                         use_legacy_landlock: false,
-                        windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                        windows_sandbox_level: WindowsSandboxLevel::Elevated,
                     },
                 },
                 Some(codex_home.path()),
