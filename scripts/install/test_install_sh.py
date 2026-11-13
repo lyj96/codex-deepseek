@@ -439,17 +439,26 @@ class InstallShTest(unittest.TestCase):
             self.assertEqual(first.returncode, 0, first.stderr)
             oldest = releases / f"{versions[0]}-{target}"
             helper = oldest / "bin/codex-code-mode-host"
-            shutil.copy("/bin/sleep", helper)
+            # The helper must remain a native executable at this exact path.
+            # A renamed multicall coreutils binary may refuse to run.
+            helper_source = root / "waiting-helper.c"
+            helper_source.write_text(
+                "#include <unistd.h>\nint main(void) { return sleep(300) ? 1 : 0; }\n"
+            )
+            subprocess.run(
+                ["cc", str(helper_source), "-o", str(helper)],
+                check=True,
+                capture_output=True,
+            )
             if system.sysname == "Darwin":
-                # A copied macOS system binary cannot run with its platform signature.
+                # Keep the native fixture explicitly signed across release renames.
                 subprocess.run(
                     ["/usr/bin/codesign", "--force", "--sign", "-", str(helper)],
                     check=True,
                     capture_output=True,
                 )
             # A helper can outlive its parent CLI; retain its whole release.
-            # Multicall coreutils dispatches by argv[0], even after copying sleep.
-            with subprocess.Popen(["sleep", "300"], executable=str(helper)) as running:
+            with subprocess.Popen([str(helper), "300"]) as running:
                 try:
                     second, _ = run_installer_in(
                         root, versions[1], **install_options[versions[1]]
