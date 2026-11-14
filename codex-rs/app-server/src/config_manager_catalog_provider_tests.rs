@@ -123,6 +123,141 @@ async fn catalog_admission_retains_openai_threads_with_an_external_default() -> 
     Ok(())
 }
 
+fn saved_provider_home() -> Result<TempDir> {
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        r#"
+model_provider = "openai"
+[model_providers.original]
+name = "Original provider"
+base_url = "https://original.invalid/v1"
+wire_api = "responses"
+supports_websockets = false
+"#,
+    )?;
+    Ok(home)
+}
+
+#[test_case("gpt-5.2-codex"; "restored_provider_model")]
+#[test_case("future-custom-api"; "unknown_custom_api_model")]
+#[tokio::test]
+async fn saved_provider_without_catalog_resumes_without_changing_default(
+    model: &str,
+) -> Result<()> {
+    let home = saved_provider_home()?;
+    let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    let config = manager
+        .load_for_resume(
+            Some("original"),
+            /*request_overrides*/ None,
+            ConfigOverrides {
+                model: Some(model.into()),
+                ..Default::default()
+            },
+            Some(home.path().to_path_buf()),
+        )
+        .await?;
+    assert_eq!(config.model_provider_id, "original");
+    assert_eq!(config.model.as_deref(), Some(model));
+    manager
+        .check_thread_model_provider_for_input(&config)
+        .await?;
+    assert_eq!(
+        manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await?
+            .model_provider_id,
+        "openai"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn saved_provider_without_catalog_rejects_provider_switch() -> Result<()> {
+    let home = saved_provider_home()?;
+    let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    let error = manager
+        .load_for_resume(
+            Some("original"),
+            /*request_overrides*/ None,
+            ConfigOverrides {
+                model_provider: Some("openai".into()),
+                ..Default::default()
+            },
+            Some(home.path().to_path_buf()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<ModelProviderError>()),
+        Some(&ModelProviderError::ModelProviderMismatch {
+            model_provider: "original".into(),
+            current_model_provider: "openai".into(),
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn saved_provider_without_catalog_rejects_definition_override() -> Result<()> {
+    let home = saved_provider_home()?;
+    let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    let error = manager
+        .load_for_resume(
+            Some("original"),
+            Some(HashMap::from([(
+                "model_providers.original.base_url".into(),
+                serde_json::json!("https://replacement.invalid/v1"),
+            )])),
+            ConfigOverrides::default(),
+            Some(home.path().to_path_buf()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<ModelProviderError>()),
+        Some(&ModelProviderError::ModelProviderNotConfigured {
+            model_provider: "original".into()
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn saved_provider_without_catalog_still_obeys_managed_requirements() -> Result<()> {
+    let home = saved_provider_home()?;
+    let manager = ConfigManager::new_for_tests(
+        home.path().to_path_buf(),
+        Vec::new(),
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_requirement("model_provider = 'openai'"),
+    );
+    let error = manager
+        .load_for_resume(
+            Some("original"),
+            /*request_overrides*/ None,
+            ConfigOverrides::default(),
+            Some(home.path().to_path_buf()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<ModelProviderError>()),
+        Some(&ModelProviderError::ModelProviderPolicyConflict {
+            model_provider: "original".into(),
+            required_model_provider: "openai".into(),
+        })
+    );
+    Ok(())
+}
+
 #[test_case("qwen", "deepseek-public"; "public_model_changes_provider")]
 #[test_case("deepseek", "deepseek-api"; "explicit_provider_changes_provider")]
 #[tokio::test]
