@@ -1,119 +1,167 @@
-name: extended-ci
+name: extended-ci GNU filesystem helper diagnosis
 
-# Supplemental coverage, explicitly dispatched after reviewing the changed areas.
-# A failed extended run remains visible; it is never converted into success.
-on:
+"on":
   workflow_dispatch:
-    inputs:
-      scope:
-        description: Full matrix, three identified regressions, or only descriptor and rollout prerequisites
-        type: choice
-        options:
-          - full
-          - focused-compatibility
-          - focused-descriptor-rollout
-        default: full
 
 permissions:
   contents: read
 
 jobs:
-  bazel:
-    if: ${{ inputs.scope == 'full' }}
-    uses: ./.github/workflows/bazel.yml
-    secrets: inherit
-  rust:
-    if: ${{ inputs.scope == 'full' }}
-    uses: ./.github/workflows/rust-ci.yml
-    with:
-      run_bazel: true
-    secrets: inherit
-  sdk:
-    if: ${{ inputs.scope == 'full' }}
-    uses: ./.github/workflows/sdk.yml
-    secrets: inherit
-
-  focused-compatibility:
-    if: ${{ inputs.scope != 'full' }}
-    name: Focused compatibility - ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    environment:
-      name: bazel
-      deployment: false
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - os: macos-15
-            target: aarch64-apple-darwin
+  gnu-helper-diagnosis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: "1"
+      RUST_MIN_STACK: "8388608"
+      EXPECTED_PRODUCT_PARENT: 7f5f1b6f0558675c2b52af776cdfbfe66501c962
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-      - name: Prepare Bazel CI
-        id: prepare_bazel
-        uses: ./.github/actions/prepare-bazel-ci
+          fetch-depth: 2
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
-          target: ${{ matrix.target }}
-          cache-scope: bazel-focused-compatibility
-      - name: Test alternate-group rollout preservation
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+          node-version-file: .nvmrc
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: nextest@0.9.149
+      - name: Record the original GNU environment and diagnostic-only source
+        id: preflight
         shell: bash
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: |
           set -euo pipefail
-          # This case needs the runner's real supplementary groups. Bazel's
-          # Linux user namespace maps only one GID; retain the filesystem
-          # sandbox for this TestRunner without changing build isolation.
-          id -G
-          cat /proc/self/gid_map
-          log="$RUNNER_TEMP/rollout-alternate-group.log"
-          ./.github/scripts/run-bazel-ci.sh --print-failed-action-summary --print-failed-test-logs -- \
-            test --jobs=2 --local_test_jobs=1 --test_output=streamed \
-            --strategy=TestRunner=processwrapper-sandbox \
-            --test_arg=compression::tests::worker_preserves_alternate_group_through_materialization \
-            --test_arg=--nocapture -- \
-            //codex-rs/rollout:rollout-unit-tests 2>&1 | tee "$log"
-          if grep -Fq 'skipping ownership regression' "$log"; then
-            echo 'Alternate-group ownership assertions did not run' >&2
-            exit 1
+          diag_dir="$RUNNER_TEMP/gnu-fs-helper-diagnosis"
+          mkdir -p "$diag_dir"
+          echo "GNU_DIAG_DIR=$diag_dir" >> "$GITHUB_ENV"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PRODUCT_PARENT"
+          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/extended-ci.yml
+          python3 .github/scripts/check-free-runners.py
+          {
+            git rev-parse HEAD HEAD^ 'HEAD^{tree}'
+            rustc -vV
+            node --version
+            uname -srv
+            ldd --version
+            ulimit -a
+            grep -E '^(Uid|Gid|CapInh|CapPrm|CapEff|CapBnd|CapAmb|NoNewPrivs|Seccomp):' /proc/self/status
+            cat /proc/self/limits
+          } > "$diag_dir/runtime-before-build.txt"
+          ldd --version | head -n1 > "$diag_dir/libc-before-packages.txt"
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev strace
+          ldd --version | head -n1 > "$diag_dir/libc-after-packages.txt"
+          cmp "$diag_dir/libc-before-packages.txt" "$diag_dir/libc-after-packages.txt"
+          if command -v gdb >/dev/null; then
+            echo 'gdb_available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'gdb_available=false' >> "$GITHUB_OUTPUT"
           fi
-      - name: Test pinned PowerShell under Wine with a PTY
-        if: always() && !cancelled() && inputs.scope == 'focused-compatibility' && steps.prepare_bazel.outcome == 'success' && matrix.target == 'x86_64-unknown-linux-gnu'
+          cat "$diag_dir/runtime-before-build.txt"
+      - name: Build only the unchanged GNU executor fixture and bubblewrap
+        id: build
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --bin bwrap
+          set +e
+          cargo test --locked -p codex-exec-server --test capability_discovery --no-run --message-format=json > "$GNU_DIAG_DIR/fixture-build.ndjson" 2> "$GNU_DIAG_DIR/fixture-build.stderr"
+          build_rc=$?
+          set -e
+          tail -n 35 "$GNU_DIAG_DIR/fixture-build.stderr"
+          printf '%s\n' "$build_rc" > "$GNU_DIAG_DIR/fixture-build-actual-exit.txt"
+          test "$build_rc" -eq 0
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          folder=pathlib.Path(os.environ['GNU_DIAG_DIR'])
+          messages=[json.loads(line) for line in (folder/'fixture-build.ndjson').read_text().splitlines() if line.strip()]
+          paths={m['executable'] for m in messages if m.get('reason')=='compiler-artifact' and m.get('target',{}).get('name')=='capability_discovery' and m.get('profile',{}).get('test') and m.get('executable')}
+          assert len(paths)==1
+          binary=pathlib.Path(paths.pop())
+          (folder/'fixture-identity.json').write_text(json.dumps({'binary':str(binary),'sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'unchangedProductParent':os.environ['EXPECTED_PRODUCT_PARENT']},indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output: output.write('binary='+str(binary)+'\n')
+          PY
+      - name: Execute the original two failing cases with the unchanged Nextest profile
+        id: original
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          cargo nextest run --no-fail-fast --profile local -p codex-exec-server --test capability_discovery sandboxed_discovery_ --no-tests fail --retries 0 > "$GNU_DIAG_DIR/original-nextest.log" 2>&1
+          actual=$?
+          set -e
+          printf '%s\n' "$actual" > "$GNU_DIAG_DIR/original-nextest-actual-exit.txt"
+          cat "$GNU_DIAG_DIR/original-nextest.log"
+          exit "$actual"
+      - name: Trace one original helper crash without changing assertions or permissions
+        id: trace
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        working-directory: codex-rs/exec-server
         shell: bash
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          GNU_TEST_BINARY: ${{ steps.build.outputs.binary }}
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}/codex-rs/exec-server
         run: |
-          ./.github/scripts/run-bazel-ci.sh --print-failed-action-summary --print-failed-test-logs -- \
-            test --jobs=2 --local_test_jobs=1 --test_output=streamed \
-            --test_arg=tests::pinned_powershell_runs_under_wine_with_a_pty \
-            --test_arg=--nocapture -- \
-            //bazel/rules/testing/wine:wine-test-support-unit-tests
-      - name: Prepare hosted macOS descriptor-test resource ceiling
-        if: matrix.target == 'aarch64-apple-darwin'
-        env:
-          CODEX_DESCRIPTOR_TEST_HOSTED: ${{ runner.environment }}
-        run: bash .github/scripts/macos-descriptor-test-limit.sh prepare
-      - name: Test high-descriptor compatibility fallback
-        if: matrix.target == 'aarch64-apple-darwin'
+          set -euo pipefail
+          set +e
+          timeout --signal=TERM --kill-after=5s 60s strace -f -qq -s 256 -e trace=process,signal,file,write,writev,close,mmap,mprotect,prlimit64,rseq -o "$GNU_DIAG_DIR/helper.strace" "$GNU_TEST_BINARY" sandboxed_discovery_follows_only_permitted_external_symlinks --exact --nocapture > "$GNU_DIAG_DIR/traced-case.log" 2>&1
+          actual=$?
+          set -e
+          printf '%s\n' "$actual" > "$GNU_DIAG_DIR/traced-case-actual-exit.txt"
+          if grep -q SIGABRT "$GNU_DIAG_DIR/helper.strace"; then
+            echo 'sigabrt=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'sigabrt=false' >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GNU_DIAG_DIR/traced-case.log"
+          grep -E 'SIGABRT|fatal|Fatal|EACCES|EPERM' "$GNU_DIAG_DIR/helper.strace" | tail -n 70 || true
+          exit "$actual"
+      - name: Capture symbol-only crash stacks when the original abort is observed
+        if: ${{ always() && steps.trace.outputs.sigabrt == 'true' && steps.preflight.outputs.gdb_available == 'true' }}
+        working-directory: codex-rs/exec-server
         shell: bash
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          GNU_TEST_BINARY: ${{ steps.build.outputs.binary }}
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}/codex-rs/exec-server
         run: |
-          ./.github/scripts/run-bazel-ci.sh --print-failed-action-summary --print-failed-test-logs -- \
-            test --jobs=2 --local_test_jobs=1 --test_output=streamed \
-            --test_arg=child_command::descriptor_tests::high_stdio_descriptors_use_compatible_fallback \
-            --test_arg=--nocapture -- \
-            //codex-rs/utils/pty:pty-unit-tests
-      - name: Restore hosted macOS descriptor-test resource ceiling
-        if: always() && matrix.target == 'aarch64-apple-darwin' && env.CODEX_DESCRIPTOR_TEST_ORIGINAL_MAXFILES != ''
-        env:
-          CODEX_DESCRIPTOR_TEST_HOSTED: ${{ runner.environment }}
-        run: bash .github/scripts/macos-descriptor-test-limit.sh restore
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
+          set -euo pipefail
+          cat > "$GNU_DIAG_DIR/catch-abort.gdb" <<'GDB'
+          set pagination off
+          set confirm off
+          set disable-randomization off
+          set startup-with-shell off
+          set print frame-arguments none
+          set detach-on-fork off
+          set follow-fork-mode child
+          set schedule-multiple on
+          set follow-exec-mode new
+          set auto-solib-add off
+          handle SIGPIPE nostop noprint pass
+          catch signal SIGABRT
+          commands
+            silent
+            printf "GNU_FS_HELPER_SIGABRT_STACK\n"
+            thread apply all bt 30
+            quit 1
+          end
+          run
+          GDB
+          set +e
+          timeout --signal=TERM --kill-after=5s 60s gdb --batch -x "$GNU_DIAG_DIR/catch-abort.gdb" --args "$GNU_TEST_BINARY" sandboxed_discovery_follows_only_permitted_external_symlinks --exact --nocapture > "$GNU_DIAG_DIR/symbol-only-stack.log" 2>&1
+          actual=$?
+          set -e
+          printf '%s\n' "$actual" > "$GNU_DIAG_DIR/debugger-collection-actual-exit.txt"
+          cat "$GNU_DIAG_DIR/symbol-only-stack.log"
+          exit "$actual"
+      - name: Preserve only bounded diagnostic logs and actual outcomes
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: gnu-fs-helper-diagnosis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gnu-fs-helper-diagnosis
+          if-no-files-found: error
+          retention-days: 7
