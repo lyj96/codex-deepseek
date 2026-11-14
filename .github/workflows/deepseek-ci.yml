@@ -180,7 +180,13 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
           CARGO_BUILD_JOBS=1 cargo build --locked \
             --bin codex-code-mode-host --bin codex-exec --bin exec-server --bin codex-exec-server --bin bwrap --bin test_stdio_server
-          "${CARGO_TARGET_DIR:-target}/debug/bwrap" --version
+          bwrap="$(realpath "${CARGO_TARGET_DIR:-target}/debug/bwrap")"
+          "$bwrap" --version
+          resources="$(dirname "$bwrap")/codex-resources"
+          mkdir -p "$resources"
+          cp "$bwrap" "$resources/bwrap"
+          cmp "$bwrap" "$resources/bwrap"
+          sha256sum "$resources/bwrap"
       - name: Test external provider routing
         working-directory: codex-rs
         run: |
