@@ -135,6 +135,27 @@ class InstallShTest(unittest.TestCase):
             )
             self.assertTrue(os.access(host_path, os.X_OK))
 
+    def test_noninteractive_install_warns_about_existing_npm_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive, checksum, metadata = create_package_release(root)
+            (root / "bin").mkdir()
+            write_executable(root / "bin" / "codex", "#!/usr/bin/env node\n")
+
+            result, _ = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=metadata,
+                archive_path=archive,
+                checksum_path=checksum,
+                force_macos=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "Leaving the existing npm-managed Codex installed", result.stderr
+            )
+
     def test_releases_latest_installs_verified_package_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -418,9 +439,19 @@ class InstallShTest(unittest.TestCase):
             self.assertEqual(first.returncode, 0, first.stderr)
             oldest = releases / f"{versions[0]}-{target}"
             helper = oldest / "bin/codex-code-mode-host"
-            shutil.copy("/bin/sleep", helper)
+            # The helper must remain a native executable at this exact path.
+            # A renamed multicall coreutils binary may refuse to run.
+            helper_source = root / "waiting-helper.c"
+            helper_source.write_text(
+                "#include <unistd.h>\nint main(void) { return sleep(300) ? 1 : 0; }\n"
+            )
+            subprocess.run(
+                ["cc", str(helper_source), "-o", str(helper)],
+                check=True,
+                capture_output=True,
+            )
             if system.sysname == "Darwin":
-                # A copied macOS system binary cannot run with its platform signature.
+                # Keep the native fixture explicitly signed across release renames.
                 subprocess.run(
                     ["/usr/bin/codesign", "--force", "--sign", "-", str(helper)],
                     check=True,

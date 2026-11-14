@@ -316,7 +316,7 @@ pub(crate) fn apply_external_provider_catalog(
     Ok(())
 }
 
-fn load_external_provider_catalog(
+pub(crate) fn load_external_provider_catalog(
     config: &Config,
     provider_id: &str,
 ) -> Result<Option<ModelsResponse>, String> {

@@ -16,10 +16,6 @@ enum GitWrapperLifetime {
 async fn assert_timed_out_git_wrapper_does_not_leave_child_process_running(
     wrapper_lifetime: GitWrapperLifetime,
 ) {
-    #[cfg(windows)]
-    if run_windows_git_wrapper_fixture(wrapper_lifetime) {
-        return;
-    }
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let child_pid_file = temp_dir.path().join("child.pid");
     let child_ready_file = temp_dir.path().join("child-ready");
@@ -42,13 +38,40 @@ async fn assert_timed_out_git_wrapper_does_not_leave_child_process_running(
     };
     #[cfg(windows)]
     let mut command = {
-        let mut command = Command::new(std::env::current_exe().expect("current test executable"));
-        command.args([
-            "--exact",
-            windows_git_wrapper_test_name(wrapper_lifetime),
-            "--nocapture",
-        ]);
-        command.env("CODEX_TEST_GIT_WRAPPER_PHASE", "wrapper");
+        let script = temp_dir.path().join("git_wrapper.py");
+        std::fs::write(
+            &script,
+            r#"import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+def wait_for(name):
+    while not Path(os.environ[name]).exists():
+        time.sleep(0.025)
+
+if sys.argv[1] == "child":
+    Path(os.environ["CHILD_READY_FILE"]).touch()
+    wait_for("RELEASE_CHILD_FILE")
+    time.sleep(1)
+    Path(os.environ["CHILD_SURVIVED_FILE"]).touch()
+    time.sleep(60)
+else:
+    child = subprocess.Popen([sys.executable, __file__, "child"])
+    Path(os.environ["CHILD_PID_FILE"]).write_text(str(child.pid))
+    if sys.argv[1] == "wait":
+        child.wait()
+    else:
+        wait_for("RELEASE_WRAPPER_FILE")
+"#,
+        )
+        .expect("write Git wrapper fixture");
+        let mut command = Command::new("python.exe");
+        command.arg(script).arg(match wrapper_lifetime {
+            GitWrapperLifetime::WaitForChild => "wait",
+            GitWrapperLifetime::ExitBeforeTimeout => "exit",
+        });
         command
     };
     command
@@ -135,74 +158,6 @@ async fn assert_timed_out_git_wrapper_does_not_leave_child_process_running(
         .stderr(Stdio::null())
         .status();
     panic!("Git wrapper child process {child_pid} survived timeout cleanup");
-}
-
-#[cfg(windows)]
-fn windows_git_wrapper_test_name(lifetime: GitWrapperLifetime) -> &'static str {
-    match lifetime {
-        GitWrapperLifetime::WaitForChild => {
-            "git_process::tests::timed_out_git_wrapper_does_not_leave_child_process_running"
-        }
-        GitWrapperLifetime::ExitBeforeTimeout => {
-            "git_process::tests::timed_out_exited_git_wrapper_does_not_leave_child_process_running"
-        }
-    }
-}
-
-// The fixture needs two owned processes and inherited output pipes. It does not
-// need a second shell's startup, quoting, or Start-Process implementation.
-#[cfg(windows)]
-fn run_windows_git_wrapper_fixture(lifetime: GitWrapperLifetime) -> bool {
-    const PHASE: &str = "CODEX_TEST_GIT_WRAPPER_PHASE";
-    let Ok(phase) = std::env::var(PHASE) else {
-        return false;
-    };
-    fn path(name: &str) -> std::path::PathBuf {
-        std::path::PathBuf::from(std::env::var_os(name).expect("private fixture path"))
-    }
-    match phase.as_str() {
-        "wrapper" => {
-            let mut child = std::process::Command::new(
-                std::env::current_exe().expect("current test executable"),
-            )
-            .args([
-                "--exact",
-                windows_git_wrapper_test_name(lifetime),
-                "--nocapture",
-            ])
-            .env(PHASE, "child")
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawn private Git fixture child");
-            std::fs::write(path("CHILD_PID_FILE"), child.id().to_string())
-                .expect("write child pid");
-            match lifetime {
-                GitWrapperLifetime::WaitForChild => {
-                    child.wait().expect("wait for fixture child");
-                }
-                GitWrapperLifetime::ExitBeforeTimeout => {
-                    while !path("RELEASE_WRAPPER_FILE").exists() {
-                        std::thread::sleep(Duration::from_millis(/*millis*/ 25));
-                    }
-                    // Intentionally leave the descendant to the owning Job Object.
-                    std::process::exit(/*code*/ 0);
-                }
-            }
-        }
-        "child" => {
-            std::fs::write(path("CHILD_READY_FILE"), "ready").expect("write child readiness");
-            while !path("RELEASE_CHILD_FILE").exists() {
-                std::thread::sleep(Duration::from_millis(/*millis*/ 25));
-            }
-            std::thread::sleep(Duration::from_secs(/*secs*/ 1));
-            std::fs::write(path("CHILD_SURVIVED_FILE"), "survived").expect("write survival marker");
-            std::thread::sleep(Duration::from_secs(/*secs*/ 60));
-        }
-        other => panic!("unexpected private fixture phase: {other}"),
-    }
-    true
 }
 
 #[tokio::test]

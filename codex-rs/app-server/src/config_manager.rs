@@ -166,6 +166,10 @@ impl ConfigManager {
         self.loader_overrides.user_config_path(self.codex_home())
     }
 
+    pub(crate) fn loader_overrides(&self) -> &LoaderOverrides {
+        &self.loader_overrides
+    }
+
     pub(crate) fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {
         self.cli_overrides
             .read()
@@ -442,7 +446,9 @@ impl ConfigManager {
         let configured = self
             .load_latest_config(Some(current.cwd.to_path_buf()))
             .await?;
-        provider_admission::ProviderAdmission::new(&configured).check_config(current)
+        provider_admission::ProviderAdmission::new(&configured)
+            .with_retained_provider(Some(&current.model_provider_id))
+            .check_config(current)
     }
 
     /// Installs local policy before cloud access; failed policy loads block traffic while
@@ -534,7 +540,7 @@ impl ConfigManager {
         &self,
         saved_provider: Option<&str>,
         request_overrides: Option<HashMap<String, serde_json::Value>>,
-        typesafe_overrides: ConfigOverrides,
+        mut typesafe_overrides: ConfigOverrides,
         cwd: Option<PathBuf>,
     ) -> std::io::Result<Config> {
         let requested_provider = typesafe_overrides.model_provider.clone().or_else(|| {
@@ -544,10 +550,15 @@ impl ConfigManager {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
         });
+        if let Some(saved) = saved_provider {
+            typesafe_overrides.model_provider = Some(saved.to_owned());
+        }
         // Resolve the selection before the saved provider is applied as a resume override.
         let current_config = self
             .load_latest_config(typesafe_overrides.cwd.clone().or_else(|| cwd.clone()))
             .await?;
+        let admission = provider_admission::ProviderAdmission::new(&current_config)
+            .with_retained_provider(saved_provider);
         let mut resume_provider = None;
         let config = self
             .load_with_validation(
@@ -558,6 +569,7 @@ impl ConfigManager {
                 |config, _overrides, layers| {
                     let requested_provider = requested_provider
                         .as_deref()
+                        .or(saved_provider)
                         .or(config.model_provider.as_deref())
                         .unwrap_or("openai");
                     // Validate the saved route even when a client sends a provider override.
@@ -588,7 +600,6 @@ impl ConfigManager {
                             ));
                         }
                     }
-                    let admission = provider_admission::ProviderAdmission::new(&current_config);
                     for provider in [
                         saved_provider.unwrap_or(requested_provider),
                         requested_provider,
@@ -616,7 +627,7 @@ impl ConfigManager {
         }
         // Admit the materialized route against the same unoverridden selection used above.
         // Reloading thread config a third time can mix two different session snapshots.
-        provider_admission::ProviderAdmission::new(&current_config).check_config(&config)?;
+        admission.check_config(&config)?;
         self.check_thread_model_provider(&config).await?;
         config.validate_windows_mxc_requirement()?;
         Ok(config)
@@ -754,7 +765,7 @@ impl ConfigManager {
             cwd,
             &self.current_cli_overrides(),
             codex_config::ConfigLoadOptions {
-                loader_overrides: self.loader_overrides.clone(),
+                loader_overrides: self.loader_overrides().clone(),
                 strict_config: self.strict_config,
                 cloud_config_bundle: policy_load.cloud_config.clone(),
             },

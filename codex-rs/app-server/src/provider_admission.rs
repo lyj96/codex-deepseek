@@ -10,6 +10,7 @@ use std::io;
 pub(super) struct ProviderAdmission<'a> {
     configured: &'a Config,
     catalog_providers: BTreeSet<String>,
+    retained_provider: Option<String>,
 }
 
 impl<'a> ProviderAdmission<'a> {
@@ -22,7 +23,14 @@ impl<'a> ProviderAdmission<'a> {
         Self {
             configured,
             catalog_providers,
+            retained_provider: None,
         }
+    }
+
+    /// A stored thread may retain its configured provider without changing the default.
+    pub(super) fn with_retained_provider(mut self, provider: Option<&str>) -> Self {
+        self.retained_provider = provider.map(str::to_owned);
+        self
     }
 
     pub(super) fn check_selection(&self, provider: &str) -> io::Result<()> {
@@ -31,6 +39,7 @@ impl<'a> ProviderAdmission<'a> {
         }
         if provider != self.configured.model_provider_id
             && !self.catalog_providers.contains(provider)
+            && self.retained_provider.as_deref() != Some(provider)
             && (provider != OPENAI_PROVIDER_ID || self.catalog_providers.is_empty())
         {
             return Err(mismatch(provider, &self.configured.model_provider_id));
@@ -43,7 +52,10 @@ impl<'a> ProviderAdmission<'a> {
         let catalog_route = self.catalog_providers.contains(&retained.model_provider_id)
             || (retained.model_provider_id == OPENAI_PROVIDER_ID
                 && !self.catalog_providers.is_empty());
-        if catalog_route
+        let retained_route = self.retained_provider.as_deref()
+            == Some(retained.model_provider_id.as_str())
+            && retained.model_provider_id != self.configured.model_provider_id;
+        if (catalog_route || retained_route)
             && self
                 .configured
                 .model_providers

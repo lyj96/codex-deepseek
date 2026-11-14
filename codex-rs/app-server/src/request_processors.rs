@@ -129,6 +129,7 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::ModelProviderError;
 use codex_app_server_protocol::PermissionProfileListParams;
 use codex_app_server_protocol::PermissionProfileListResponse;
 use codex_app_server_protocol::PermissionProfileSummary;
@@ -464,6 +465,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnEnvironmentRequest;
 use codex_protocol::protocol::W3cTraceContext;
+#[cfg(test)]
 use codex_protocol::protocol::strip_user_message_prefix;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
@@ -692,6 +694,36 @@ fn resolve_turn_environment_requests(
     )
     .map_err(environment_selection_error)?;
     Ok(Some(requests))
+}
+
+/// Project-local layers cannot define providers, so explicit selectors can use the startup map.
+fn config_for_provider(
+    startup: &Arc<Config>,
+    provider_id: &str,
+) -> Result<Arc<Config>, JSONRPCErrorError> {
+    if startup.model_provider_id == provider_id {
+        return Ok(Arc::clone(startup));
+    }
+    let provider = startup.model_providers.get(provider_id).ok_or_else(|| {
+        model_provider_error(&ModelProviderError::ModelProviderNotConfigured {
+            model_provider: provider_id.to_owned(),
+        })
+    })?;
+    let mut config = startup.as_ref().clone();
+    config.model_provider_id = provider_id.to_owned();
+    config.model_provider = provider.clone();
+    let selected_catalog = startup
+        .configured_provider_catalog(provider_id)
+        .map_err(invalid_request)?;
+    let active_managed_catalog = startup
+        .configured_provider_catalog(&startup.model_provider_id)
+        .map_err(invalid_request)?;
+    if selected_catalog.is_some() || active_managed_catalog.is_some() {
+        // A managed catalog belongs to its Provider. Explicit selection must not
+        // reuse another Provider's capabilities or replace the active disk cache.
+        config.model_catalog = selected_catalog;
+    }
+    Ok(Arc::new(config))
 }
 
 fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {

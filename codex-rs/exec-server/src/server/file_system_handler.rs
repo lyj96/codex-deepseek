@@ -3,7 +3,10 @@ use std::io;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_exec_server_protocol::JSONRPCErrorError;
+use futures::StreamExt;
 
+use crate::CapabilityRootDiscoverRequest;
+use crate::CapabilityRootDiscovery;
 use crate::CapabilityRootsDiscoverParams;
 use crate::CapabilityRootsDiscoverResponse;
 use crate::CopyOptions;
@@ -14,6 +17,9 @@ use crate::GetMetadataOptions;
 use crate::ReadFileOptions;
 use crate::RemoveOptions;
 use crate::WriteFileOptions;
+use crate::capability_discovery::CapabilityDiscoveryError;
+use crate::capability_discovery::MAX_CONCURRENT_ROOTS;
+use crate::capability_discovery::MAX_ROOTS_PER_REQUEST;
 use crate::file_handle::FileHandleManager;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
@@ -76,6 +82,12 @@ impl FileSystemHandler {
         &self,
         params: CapabilityRootsDiscoverParams,
     ) -> Result<CapabilityRootsDiscoverResponse, JSONRPCErrorError> {
+        if params.roots.len() > MAX_ROOTS_PER_REQUEST {
+            return Err(invalid_request(
+                CapabilityDiscoveryError::TooManyRoots.to_string(),
+            ));
+        }
+        let split_helpers = params.roots.len() > 1;
         let sandbox = params
             .roots
             .first()
@@ -114,9 +126,50 @@ impl FileSystemHandler {
             }
         }
 
-        crate::discover_capability_roots(&self.file_system, params)
-            .await
-            .map_err(|error| invalid_request(error.to_string()))
+        let roots = futures::stream::iter(params.roots)
+            .map(|root| self.discover_capability_root(root, split_helpers))
+            .buffered(MAX_CONCURRENT_ROOTS)
+            .collect()
+            .await;
+        Ok(CapabilityRootsDiscoverResponse { roots })
+    }
+
+    async fn discover_capability_root(
+        &self,
+        root: CapabilityRootDiscoverRequest,
+        use_helper: bool,
+    ) -> CapabilityRootDiscovery {
+        let sandbox = root.sandbox.as_ref().filter(|sandbox| {
+            use_helper
+                && sandbox
+                    .validate_file_system_paths_for_current_host()
+                    .is_ok()
+                && sandbox.should_read_from_sandbox()
+                && (!cfg!(windows) || sandbox.windows_sandbox_is_requested())
+        });
+        if let Some(sandbox) = sandbox {
+            let mut helper_root = root.clone();
+            helper_root.sandbox = None;
+            let params = CapabilityRootsDiscoverParams {
+                roots: vec![helper_root],
+            };
+            let result = match self.file_system.sandboxed() {
+                Ok(file_system) => file_system.discover_capability_roots(params, sandbox).await,
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(mut response)
+                    if response.roots.len() == 1
+                        && response.roots[0].id == root.id
+                        && response.roots[0].path == root.path =>
+                {
+                    return response.roots.remove(0);
+                }
+                Ok(_) => tracing::warn!("single-root helper returned an unexpected root"),
+                Err(error) => tracing::warn!(%error, "single-root capability helper failed"),
+            }
+        }
+        crate::capability_discovery::discover_root(&self.file_system, root).await
     }
 
     pub(crate) async fn open(
@@ -369,8 +422,8 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
 
 #[cfg(test)]
 mod tests {
-    use codex_protocol::protocol::NetworkAccess;
-    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
@@ -389,20 +442,16 @@ mod tests {
         .expect("runtime paths");
         let handler = FileSystemHandler::new(runtime_paths);
         let sandbox_cwd = PathUri::from_host_native_path(temp_dir.path()).expect("tempdir URI");
-        let sandbox_context = |sandbox_policy| {
-            FileSystemSandboxContext::from_legacy_sandbox_policy(
-                sandbox_policy,
-                sandbox_cwd.clone(),
-            )
-            .expect("sandbox context")
+        let sandbox_context = |permissions| {
+            FileSystemSandboxContext::from_permission_profile(permissions, sandbox_cwd.clone())
         };
 
-        for (file_name, sandbox_policy) in [
-            ("danger.txt", SandboxPolicy::DangerFullAccess),
+        for (file_name, permission_profile) in [
+            ("danger.txt", PermissionProfile::Disabled),
             (
                 "external.txt",
-                SandboxPolicy::ExternalSandbox {
-                    network_access: NetworkAccess::Restricted,
+                PermissionProfile::External {
+                    network: NetworkSandboxPolicy::Restricted,
                 },
             ),
         ] {
@@ -414,7 +463,7 @@ mod tests {
                     path: path.clone(),
                     follow_symlinks: None,
                     data_base64: STANDARD.encode("ok"),
-                    sandbox: Some(sandbox_context(sandbox_policy.clone())),
+                    sandbox: Some(sandbox_context(permission_profile.clone())),
                 })
                 .await
                 .expect("write file");
@@ -422,7 +471,7 @@ mod tests {
             let canonicalized = handler
                 .canonicalize(FsCanonicalizeParams {
                     path: path.clone(),
-                    sandbox: Some(sandbox_context(sandbox_policy.clone())),
+                    sandbox: Some(sandbox_context(permission_profile.clone())),
                 })
                 .await
                 .expect("canonicalize file");
@@ -438,7 +487,7 @@ mod tests {
                 .read_file(FsReadFileParams {
                     path,
                     follow_symlinks: None,
-                    sandbox: Some(sandbox_context(sandbox_policy)),
+                    sandbox: Some(sandbox_context(permission_profile)),
                 })
                 .await
                 .expect("read file");

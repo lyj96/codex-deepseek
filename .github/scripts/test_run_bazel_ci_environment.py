@@ -20,13 +20,16 @@ class WindowsEnvironmentTest(unittest.TestCase):
         command="build",
         targets=("//example:target",),
         target_triple=None,
+        voice_system_root=None,
+        voice_host_arch=None,
+        host_arch="AMD64",
     ):
         env = os.environ.copy()
         env.update(
             RUNNER_OS=runner_os,
             CODEX_BAZEL_BIN="echo",
             CODEX_BAZEL_WINDOWS_PATH="C:/Windows;C:/Tools",
-            PROCESSOR_ARCHITECTURE="AMD64",
+            PROCESSOR_ARCHITECTURE=host_arch,
             SystemRoot=system_root,
             VOICE_WINDOWS_BAZEL_REPOSITORY="D:/temp/voice-tools",
         )
@@ -35,6 +38,12 @@ class WindowsEnvironmentTest(unittest.TestCase):
         env.pop("GITHUB_ACTIONS", None)
         env.pop("RUNNER_ENVIRONMENT", None)
         env.pop("CODEX_BAZEL_TARGET_TRIPLE", None)
+        env.pop("VOICE_WINDOWS_SYSTEM_ROOT", None)
+        env.pop("VOICE_WINDOWS_HOST_ARCH", None)
+        if voice_system_root is not None:
+            env["VOICE_WINDOWS_SYSTEM_ROOT"] = voice_system_root
+        if voice_host_arch is not None:
+            env["VOICE_WINDOWS_HOST_ARCH"] = voice_host_arch
         if target_triple is not None:
             env["CODEX_BAZEL_TARGET_TRIPLE"] = target_triple
         if hosted:
@@ -124,7 +133,10 @@ class WindowsEnvironmentTest(unittest.TestCase):
             for remote in (False, True):
                 with self.subTest(triple=triple, remote=remote):
                     result = self.invoke(
-                        runner_os=runner_os, remote=remote, target_triple=triple
+                        runner_os=runner_os,
+                        remote=remote,
+                        target_triple=triple,
+                        args=("--config=caller",),
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     platform = f"--platforms=@rules_rs//rs/platforms:{triple}"
@@ -132,11 +144,18 @@ class WindowsEnvironmentTest(unittest.TestCase):
                     self.assertNotIn(
                         "--platforms=//:windows_x86_64_gnullvm", result.stdout
                     )
-                    if remote:
-                        self.assertGreater(
-                            result.stdout.index(platform),
-                            result.stdout.index("--config=ci-"),
-                        )
+                    self.assertGreater(
+                        result.stdout.index(platform),
+                        result.stdout.index("--config=caller"),
+                    )
+                    # Stable CI no longer infers remote execution from a key.
+                    for config in (
+                        "ci-linux",
+                        "ci-macos",
+                        "ci-v8",
+                        "ci-windows-cross",
+                    ):
+                        self.assertNotIn("--config=" + config + " ", result.stdout)
 
     def test_declared_target_preserves_explicit_platform_and_rejects_unknown(self):
         for args in (("--platforms=//:custom",), ("--platforms", "//:custom")):
@@ -156,6 +175,21 @@ class WindowsEnvironmentTest(unittest.TestCase):
         result = self.invoke(system_root="")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SystemRoot must be set", result.stderr)
+
+    def test_native_windows_identity_takes_precedence(self):
+        result = self.invoke(
+            voice_system_root="C:/Native/Windows", voice_host_arch="ARM64"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for prefix in ("--action_env=", "--host_action_env="):
+            self.assertIn(prefix + "SystemRoot=C:/Native/Windows", result.stdout)
+            self.assertIn(prefix + "PROCESSOR_ARCHITECTURE=ARM64", result.stdout)
+            self.assertNotIn(prefix + "SystemRoot=C:/Windows ", result.stdout)
+
+    def test_local_windows_requires_host_architecture(self):
+        result = self.invoke(host_arch="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PROCESSOR_ARCHITECTURE must be set", result.stderr)
 
     def test_rollout_strategy_is_limited_to_hosted_linux_tests(self):
         strategy = "--strategy=TestRunner=processwrapper-sandbox"
@@ -190,8 +224,10 @@ class WindowsEnvironmentTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--action_env=SystemRoot=C:/Windows", result.stdout)
 
-    def test_remote_linux_does_not_receive_windows_identity(self):
-        result = self.invoke(remote=True, system_root="", hosted=True)
+    def test_linux_does_not_receive_windows_identity_with_a_legacy_key(self):
+        result = self.invoke(
+            runner_os="Linux", remote=True, system_root="", hosted=True
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("--action_env=SystemRoot", result.stdout)
         self.assertNotIn("--host_action_env=PROCESSOR_ARCHITECTURE", result.stdout)

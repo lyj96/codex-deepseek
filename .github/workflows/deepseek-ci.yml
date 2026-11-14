@@ -180,23 +180,36 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
           CARGO_BUILD_JOBS=1 cargo build --locked \
             --bin codex-code-mode-host --bin codex-exec --bin exec-server --bin codex-exec-server --bin bwrap --bin test_stdio_server
-          "${CARGO_TARGET_DIR:-target}/debug/bwrap" --version
+          bwrap="$(realpath "${CARGO_TARGET_DIR:-target}/debug/bwrap")"
+          "$bwrap" --version
+          resources="$(dirname "$bwrap")/codex-resources"
+          mkdir -p "$resources"
+          cp "$bwrap" "$resources/bwrap"
+          cmp "$bwrap" "$resources/bwrap"
+          sha256sum "$resources/bwrap"
       - name: Test external provider routing
         working-directory: codex-rs
         run: |
           CARGO_BUILD_JOBS=1 just test -p codex-cli --bin codex provider_cmd::tests
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server-protocol --lib schema_fixtures_tests --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server --lib config_manager:: --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::catalog_provider_admission --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::model_provider_enforcement --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::thread_settings_update
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::account::
           CARGO_BUILD_JOBS=1 just test -p codex-app-server suite::v2::model_list
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::model_provider_config_tests --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::model_provider_list_tests --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::model_provider_capabilities_read --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-features --lib --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-models-manager --lib --no-tests fail
           CARGO_BUILD_JOBS=1 just test -p codex-model-provider --lib
           CARGO_BUILD_JOBS=1 just test -p codex-mcp --lib connection_pool::tests --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib model_catalog
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::scenarios::incremental_tools --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::gcp --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::compact_remote::provider_automatic_compaction_uses_v2_responses_endpoint --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::base_instructions --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::spawn_agent_description
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all model_catalog_refresh_preserves_tools_and_history
@@ -222,6 +235,9 @@ jobs:
         run: |
           CARGO_BUILD_JOBS=1 just test -p codex-app-server-transport --lib daemon_recovery --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-app-server --test all suite::v2::daemon_update_recovery --no-tests fail --retries 0
+      - name: Test executor capability sandbox isolation
+        working-directory: codex-rs
+        run: CARGO_BUILD_JOBS=1 just test -p codex-exec-server --test capability_discovery sandboxed_discovery_ --no-tests fail --retries 0
       - name: Test stable attached forks, MCP cancellation and API errors
         working-directory: codex-rs
         run: |
@@ -388,6 +404,31 @@ jobs:
           if (Select-String -LiteralPath $log -Pattern '^\s*LEAK\s|\b[1-9][0-9]* leaky\b' -Quiet) {
             throw 'Provider shutdown still leaves a leaked process or handle'
           }
+      - name: Test Windows sandbox compatibility and watcher timing
+        working-directory: codex-rs
+        shell: pwsh
+        env:
+          CODEX_HOME: ${{ runner.temp }}/sandbox-compatibility-home
+          LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "2"
+        run: |
+          New-Item -ItemType Directory -Path $env:CODEX_HOME -Force | Out-Null
+          cargo build --locked --target x86_64-pc-windows-msvc --bin codex-command-runner --bin codex-windows-sandbox-setup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-exec-server --lib --locked --target x86_64-pc-windows-msvc `
+            -E 'test(=fs_sandbox::tests::sandbox_exec_request_carries_helper_env) | test(=fs_sandbox::tests::sandbox_exec_request_uses_filesystem_root_and_preserves_policy_cwd) | test(=fs_sandbox::tests::sandbox_exec_request_binds_windows_relative_globs_to_policy_cwd)' `
+            --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-sandboxing --lib --locked --target x86_64-pc-windows-msvc transform_for_direct_spawn_windows_materializes_inner_helper --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-file-watcher --lib --locked --target x86_64-pc-windows-msvc `
+            -E 'test(=tests::throttled_receiver_coalesces_within_interval) | test(=tests::debounced_receiver_coalesces_each_event_batch)' `
+            --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-exec-server --test capability_discovery --locked --target x86_64-pc-windows-msvc executor_legacy_missing_or_null_sandbox_cwd_keeps_absolute_requests_working --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   macos-release-compile:
     runs-on: macos-latest

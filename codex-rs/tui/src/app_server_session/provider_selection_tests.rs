@@ -9,18 +9,22 @@ use pretty_assertions::assert_eq;
 async fn starts_and_forks_use_server_provider_unless_explicitly_selected() -> Result<()> {
     let home = tempfile::tempdir()?;
     write_provider_config(home.path())?;
-    let server_config = ConfigBuilder::default()
-        .codex_home(home.path().to_path_buf())
-        .build()
-        .await?;
-    let client_config = ConfigBuilder::default()
-        .codex_home(home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            model_provider: Some("client-provider".into()),
-            ..Default::default()
-        })
-        .build()
-        .await?;
+    let server_config = Box::pin(
+        ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build(),
+    )
+    .await?;
+    let client_config = Box::pin(
+        ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                model_provider: Some("client-provider".into()),
+                ..Default::default()
+            })
+            .build(),
+    )
+    .await?;
     let local_settings = LocalSettings::from(&client_config);
     let parent = crate::tests::write_session_rollout(
         home.path(),
@@ -30,27 +34,26 @@ async fn starts_and_forks_use_server_provider_unless_explicitly_selected() -> Re
         "server-provider",
         server_config.cwd.as_path(),
     )?;
-    let mut server = crate::start_embedded_app_server_for_picker(&server_config).await?;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&server_config)).await?;
     assert_eq!(
-        crate::lookup_session_target_with_app_server(
+        Box::pin(crate::lookup_session_target_with_app_server(
             crate::resume_picker::SessionPickerAction::Resume,
             &mut server,
             &client_config,
             "Server history"
-        )
+        ))
         .await?
         .unwrap()
         .thread_id,
         parent
     );
-    let resumed = server
-        .resume_thread(
-            &local_settings,
-            client_config.clone(),
-            parent,
-            ResumeModelSettings::OverrideFromCurrentConfig,
-        )
-        .await?;
+    let resumed = Box::pin(server.resume_thread(
+        &local_settings,
+        client_config.clone(),
+        parent,
+        ResumeModelSettings::OverrideFromCurrentConfig,
+    ))
+    .await?;
     assert_eq!(resumed.session.model_provider_id, "server-provider");
     for explicit in [false, true] {
         server.model_provider_override = explicit.then(|| "client-provider".to_string());
@@ -59,10 +62,9 @@ async fn starts_and_forks_use_server_provider_unless_explicitly_selected() -> Re
         } else {
             "server-provider"
         };
-        let started = server.start_thread(&client_config).await?;
-        let forked = server
-            .fork_thread(&local_settings, client_config.clone(), parent)
-            .await?;
+        let started = Box::pin(server.start_thread(&client_config)).await?;
+        let forked =
+            Box::pin(server.fork_thread(&local_settings, client_config.clone(), parent)).await?;
         assert_eq!(
             (
                 started.session.model_provider_id.as_str(),
@@ -80,12 +82,11 @@ async fn starts_and_forks_use_server_provider_unless_explicitly_selected() -> Re
     );
     std::fs::write(path, updated)?;
     assert_eq!(
-        server.history_model_provider(&client_config).await?,
+        Box::pin(server.history_model_provider(&client_config)).await?,
         Some("client-provider".into())
     );
     assert_eq!(
-        server
-            .start_thread(&client_config)
+        Box::pin(server.start_thread(&client_config))
             .await?
             .session
             .model_provider_id,
@@ -93,19 +94,18 @@ async fn starts_and_forks_use_server_provider_unless_explicitly_selected() -> Re
     );
     // A fork of the active session preserves its provider even if launch defaults differ.
     server.model_provider_override = Some("client-provider".into());
-    let forked = server
-        .fork_thread_at(
-            &local_settings,
-            server_config,
-            parent,
-            /*last_turn_id*/ None,
-            /*before_turn_id*/ None,
-            ForkGoalContinuation::StartIfIdle,
-            /*selected_profile*/ None,
-        )
-        .await?;
+    let forked = Box::pin(server.fork_thread_at(
+        &local_settings,
+        server_config,
+        parent,
+        /*last_turn_id*/ None,
+        /*before_turn_id*/ None,
+        ForkGoalContinuation::StartIfIdle,
+        /*selected_profile*/ None,
+    ))
+    .await?;
     assert_eq!(forked.session.model_provider_id, "server-provider");
-    server.shutdown().await?;
+    Box::pin(server.shutdown()).await?;
     Ok(())
 }
 
@@ -127,6 +127,16 @@ async fn selected_profile_provider_is_explicit() -> Result<()> {
         provider_selection::explicit_provider(&config),
         Some("openai".into())
     );
+    let mut server = crate::start_embedded_app_server_for_picker(&config).await?;
+    assert_eq!(server.client_provider_override_for_new_chats(&config), None);
+    server.thread_params_mode = ThreadParamsMode::Remote;
+    assert_eq!(
+        server.client_provider_override_for_new_chats(&config),
+        Some("openai".into())
+    );
+    server.thread_params_mode = ThreadParamsMode::Cloud;
+    assert_eq!(server.client_provider_override_for_new_chats(&config), None);
+    server.shutdown().await?;
     Ok(())
 }
 
@@ -137,27 +147,33 @@ async fn required_provider_overrides_oss_history_selection() -> Result<()> {
         home.path().join("requirements.toml"),
         "model_provider = 'openai'",
     )?;
-    let config = ConfigBuilder::default()
-        .codex_home(home.path().to_path_buf())
-        .loader_overrides(
-            codex_config::LoaderOverrides::with_managed_config_path_for_tests(
-                home.path().join("managed_config.toml"),
-            ),
-        )
-        .harness_overrides(ConfigOverrides {
-            model_provider: Some("ollama".into()),
-            ..Default::default()
-        })
-        .build()
-        .await?;
-    let mut server = crate::start_embedded_app_server_for_picker(&config).await?;
+    let config = Box::pin(
+        ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .loader_overrides(
+                codex_config::LoaderOverrides::with_managed_config_path_for_tests(
+                    home.path().join("managed_config.toml"),
+                ),
+            )
+            .harness_overrides(ConfigOverrides {
+                model_provider: Some("ollama".into()),
+                ..Default::default()
+            })
+            .build(),
+    )
+    .await?;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
     server.model_provider_override = Some("ollama".into());
     assert_eq!(config.model_provider_id, "openai");
     assert_eq!(
-        server.history_model_provider(&config).await?,
+        server.client_provider_override_for_new_chats(&config),
         Some("openai".into())
     );
-    server.shutdown().await?;
+    assert_eq!(
+        Box::pin(server.history_model_provider(&config)).await?,
+        Some("openai".into())
+    );
+    Box::pin(server.shutdown()).await?;
     Ok(())
 }
 
@@ -183,7 +199,7 @@ requires_openai_auth = false
 }
 
 #[tokio::test]
-async fn resume_discovers_other_providers_but_rejects_mismatched_resume() -> Result<()> {
+async fn resume_discovers_and_reopens_the_saved_gateway() -> Result<()> {
     let home = tempfile::tempdir()?;
     write_provider_config(home.path())?;
     let original = ConfigBuilder::default()
@@ -250,18 +266,15 @@ async fn resume_discovers_other_providers_but_rejects_mismatched_resume() -> Res
         .await?
         .is_none()
     );
-    let error = server
+    let resumed = server
         .resume_thread(
             &local_settings,
             config.clone(),
             parent,
             ResumeModelSettings::RestoreFromThread,
         )
-        .await
-        .expect_err("a different configured provider must block resume");
-    assert!(error.to_string().contains(
-        "This chat uses server-provider, but your current provider is client-provider. Switch to server-provider to continue."
-    ));
+        .await?;
+    assert_eq!(resumed.session.model_provider_id, "server-provider");
     assert_eq!(
         server
             .start_thread(&config)

@@ -120,8 +120,8 @@ jobs:
     needs: changed
     if: ${{ needs.changed.outputs.argument_comment_lint_package == 'true' }}
     env:
-      CARGO_DYLINT_VERSION: 6.1.0
-      DYLINT_LINK_VERSION: 6.1.0
+      CARGO_DYLINT_VERSION: 6.3.0
+      DYLINT_LINK_VERSION: 6.3.0
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -223,7 +223,6 @@ jobs:
         uses: ./.github/actions/run-argument-comment-lint
         with:
           target: ${{ matrix.target }}
-          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Check for a clean worktree
         if: always() && !cancelled() && steps.argument_comment_lint_gate.outputs.run == 'true'

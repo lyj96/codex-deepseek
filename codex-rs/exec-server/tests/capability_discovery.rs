@@ -6,7 +6,6 @@ mod fake_bwrap;
 #[path = "capability_discovery/mount_watch.rs"]
 mod mount_watch;
 
-#[cfg(target_os = "linux")]
 use anyhow::Context as _;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -233,6 +232,8 @@ async fn discovers_cursor_plugin_without_reading_default_mcp_for_inline_servers(
 #[tokio::test]
 async fn executor_legacy_missing_or_null_sandbox_cwd_keeps_absolute_requests_working()
 -> anyhow::Result<()> {
+    #[cfg(windows)]
+    let _sandbox_account_guard = common::exec_server::prepare_windows_sandbox_test()?;
     let workspace = tempfile::tempdir()?;
     std::fs::write(workspace.path().join("note.txt"), b"contents")?;
     write_file(
@@ -259,7 +260,11 @@ async fn executor_legacy_missing_or_null_sandbox_cwd_keeps_absolute_requests_wor
         PermissionProfile::from_runtime_permissions(&process_policy, NetworkSandboxPolicy::Enabled),
         cwd.clone(),
     );
-    process_sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+    process_sandbox.windows_sandbox_selection = if cfg!(windows) {
+        WindowsSandboxSelection::Elevated
+    } else {
+        WindowsSandboxSelection::RestrictedToken
+    };
     let sandbox =
         FileSystemSandboxContext::from_permission_profile(PermissionProfile::Disabled, cwd.clone());
     let requests = [
@@ -1100,7 +1105,9 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
     };
     #[cfg(not(target_os = "linux"))]
     let mut server = exec_server().await?;
-    initialize(&mut server).await?;
+    initialize(&mut server)
+        .await
+        .context("initialize shared-sandbox discovery server")?;
     let response = discover_roots(
         &mut server,
         vec![
@@ -1116,7 +1123,8 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
             },
         ],
     )
-    .await?;
+    .await
+    .context("discover shared-permission roots in one batch")?;
     assert_eq!(
         response
             .roots
@@ -1172,7 +1180,8 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
                 },
             ],
         )
-        .await?;
+        .await
+        .context("discover fallback roots after injected batch-helper failure")?;
         assert_eq!(
             fallback
                 .roots
@@ -1184,11 +1193,15 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
                 ("fallback-second".to_string(), 1, None),
             ]
         );
-        assert!(std::fs::read_to_string(&launch_log)?.lines().count() > 2);
+        let fallback_launch_count = std::fs::read_to_string(&launch_log)?.lines().count();
+        assert!(fallback_launch_count > 2);
+        assert_eq!(fallback_launch_count, 4);
 
         server.shutdown().await?;
         server = exec_server().await?;
-        initialize(&mut server).await?;
+        initialize(&mut server)
+            .await
+            .context("initialize real-sandbox discovery server")?;
     }
 
     let read_first_root = FileSystemSandboxEntry::new(
@@ -1232,7 +1245,8 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
             },
         ],
     )
-    .await?;
+    .await
+    .context("discover separately restricted roots without merging permissions")?;
     assert_eq!(
         response
             .roots

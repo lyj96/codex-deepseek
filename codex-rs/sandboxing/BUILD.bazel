@@ -9,5 +9,9 @@ codex_rust_crate(
         "src/seatbelt_preferences_policy.sbpl",
     ],
     crate_name = "codex_sandboxing",
+    extra_binaries = [
+        "//codex-rs/windows-sandbox-rs:codex-command-runner",
+        "//codex-rs/windows-sandbox-rs:codex-windows-sandbox-setup",
+    ],
     test_tags = ["no-sandbox"],
 )
