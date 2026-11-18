@@ -161,10 +161,14 @@ async fn prediction_fork_keeps_inherited_tools() -> Result<()> {
     &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, true)]; "deepseek_ignores_legacy_opt_in")]
 #[test_case(false, None, false, "custom-provider",
     &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, true)]; "custom_provider_ignores_legacy_opt_in")]
-#[test_case(false, None, false, AMAZON_BEDROCK_PROVIDER_ID, &[]; "mantle_default")]
+#[test_case(false, None, true, AMAZON_BEDROCK_PROVIDER_ID, &[]; "mantle_default")]
+#[test_case(false, None, false, AMAZON_BEDROCK_PROVIDER_ID,
+    &[(Feature::IncrementalToolsLegacy, false)]; "mantle_opt_out")]
+#[test_case(false, None, true, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, &[]; "runtime_default")]
+#[test_case(false, None, false, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
+    &[(Feature::IncrementalToolsLegacy, false)]; "runtime_opt_out")]
 #[test_case(false, None, true, AMAZON_BEDROCK_PROVIDER_ID,
     &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, false)]; "mantle_enabled")]
-#[test_case(false, None, false, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, &[]; "runtime_default")]
 #[test_case(false, None, true, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
     &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, false)]; "runtime_enabled")]
 #[test_case(false, None, true, GCP_PROVIDER_ID, &[]; "gcp_default")]

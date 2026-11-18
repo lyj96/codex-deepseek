@@ -423,6 +423,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           just test -p codex-sandboxing --lib --locked --target x86_64-pc-windows-msvc transform_for_direct_spawn_windows_materializes_inner_helper --retries 0 --no-tests fail
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-sandboxing --lib --locked --target x86_64-pc-windows-msvc launch::helper_permissions_ --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-windows-sandbox --lib --locked --target x86_64-pc-windows-msvc -E 'test(=unified_exec::tests::elevated_capture_emits_output_and_preserves_descendant_after_normal_exit) | test(=unified_exec::tests::elevated_capture_cancellation_terminates_descendants_without_timeout) | test(=unified_exec::tests::elevated_tty_job_terminates_and_preserves_descendants)' --test-threads 1 --retries 0 --no-tests fail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           just test -p codex-file-watcher --lib --locked --target x86_64-pc-windows-msvc `
             -E 'test(=tests::throttled_receiver_coalesces_within_interval) | test(=tests::debounced_receiver_coalesces_each_event_batch)' `
             --retries 0 --no-tests fail
