@@ -12,12 +12,71 @@ on:
           - full
           - focused-compatibility
           - focused-descriptor-rollout
+          - fence-diagnosis
         default: full
 
 permissions:
   contents: read
 
 jobs:
+  fence-startup-diagnosis:
+    if: ${{ inputs.scope == 'fence-diagnosis' && github.ref == 'refs/heads/codex/fence-startup-v0.170.0' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Read trusted runner service prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/uname -m
+          /usr/bin/id -un
+          /usr/bin/stat -c '%A %a %U:%G %n' /run /usr/bin/systemd-run /usr/bin/sudo
+          /usr/bin/findmnt -no TARGET,FSTYPE,OPTIONS --target /run
+          /usr/bin/systemctl --version
+
+      - name: Start the unchanged released Fence action
+        uses: openai/fence@7cba9082252803421a0e433f29198de6d0063221 # pin@v0.13.1
+        env:
+          ACTIONS_STEP_DEBUG: 'true'
+        with:
+          mode: audit
+
+      - name: Read bounded systemd failure evidence
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import re
+          import subprocess
+
+          def run(args):
+              result = subprocess.run(args, capture_output=True, text=True, errors='replace', timeout=15)
+              return result.returncode, result.stdout, result.stderr
+
+          code, output, error = run(['/usr/bin/systemctl', 'list-units', '--all', '--no-legend', '--plain', '--type=service', 'fence-*.service'])
+          units = [line.split()[0] for line in output.splitlines() if line.split() and re.fullmatch(r'fence-[A-Za-z0-9_.@-]+\.service', line.split()[0])]
+          print(json.dumps({'listUnitsExit': code, 'units': units, 'stderr': error[:512]}))
+          for unit in units:
+              code, output, error = run(['/usr/bin/systemctl', 'show', '--no-pager', '--property=Id,LoadState,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,MainPID', unit])
+              print(json.dumps({'unit': unit, 'showExit': code, 'properties': output[:8192], 'stderr': error[:512]}))
+          code, output, error = run(['/usr/bin/sudo', '/usr/bin/journalctl', '--no-pager', '--output=json', '--since=-10min', '--lines=100', '--unit=fence-*.service'])
+          messages = []
+          non_json = []
+          for line in output.splitlines():
+              try:
+                  record = json.loads(line)
+              except json.JSONDecodeError:
+                  non_json.append(line[:256])
+                  continue
+              if record.get('SYSLOG_IDENTIFIER') == 'systemd' and str(record.get('_PID')) == '1':
+                  messages.append({key: str(record.get(key, ''))[:1024] for key in ('UNIT', '_SYSTEMD_UNIT', 'PRIORITY', 'MESSAGE')})
+          print(json.dumps({'journalExit': code, 'trustedSystemdMessages': messages, 'nonJson': non_json, 'stderr': error[:512]}))
+          PY
+
   bazel:
     if: ${{ inputs.scope == 'full' }}
     uses: ./.github/workflows/bazel.yml
@@ -34,7 +93,7 @@ jobs:
     secrets: inherit
 
   focused-compatibility:
-    if: ${{ inputs.scope != 'full' }}
+    if: ${{ inputs.scope == 'focused-compatibility' || inputs.scope == 'focused-descriptor-rollout' }}
     name: Focused compatibility - ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
