@@ -273,11 +273,19 @@ fn windows_cwd_relative_denial_binding_keeps_tilde_patterns_home_relative() {
 }
 
 #[cfg(test)]
+fn helper_permissions_cwd_for_test() -> AbsolutePathBuf {
+    // Shared preparation expands native system aliases, including Windows short paths.
+    let cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(&std::env::temp_dir())
+        .expect("native temporary directory");
+    AbsolutePathBuf::from_absolute_path(cwd).expect("absolute cwd")
+}
+
+#[cfg(test)]
 fn helper_permissions_for_test(
     entries: Vec<FileSystemSandboxEntry>,
     runtime_readable_paths: &[AbsolutePathBuf],
 ) -> FileSystemSandboxPolicy {
-    let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).expect("absolute cwd");
+    let cwd = helper_permissions_cwd_for_test();
     let cwd = PathUri::from_abs_path(&cwd);
     let policy = FileSystemSandboxPolicy::restricted(entries);
     let profile =
@@ -304,7 +312,7 @@ fn helper_permissions_enable_minimal_reads_for_restricted_profile() {
 #[cfg(test)]
 #[test]
 fn helper_permissions_enable_minimal_reads_for_restricted_profile_with_writes() {
-    let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).expect("absolute cwd");
+    let cwd = helper_permissions_cwd_for_test();
     let policy = helper_permissions_for_test(
         vec![FileSystemSandboxEntry::new(
             cwd.join("writable").into(),
@@ -318,7 +326,7 @@ fn helper_permissions_enable_minimal_reads_for_restricted_profile_with_writes() 
 #[cfg(test)]
 #[test]
 fn helper_permissions_preserve_existing_writes() {
-    let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).expect("absolute cwd");
+    let cwd = helper_permissions_cwd_for_test();
     let writable = cwd.join("writable");
     let readable =
         AbsolutePathBuf::from_absolute_path(std::env::current_exe().expect("current exe"))
@@ -331,5 +339,12 @@ fn helper_permissions_preserve_existing_writes() {
         std::slice::from_ref(&readable),
     );
     assert!(policy.can_read_local_path_with_cwd(readable.as_path(), cwd.as_path()));
-    assert!(policy.can_write_local_path_with_cwd(writable.as_path(), cwd.as_path()));
+    assert!(
+        policy.can_write_local_path_with_cwd(writable.as_path(), cwd.as_path()),
+        "existing write root was lost: cwd={cwd:?}, writable={writable:?}, policy={policy:?}"
+    );
+    assert!(
+        !policy
+            .can_write_local_path_with_cwd(cwd.join("read-only-sibling").as_path(), cwd.as_path())
+    );
 }
