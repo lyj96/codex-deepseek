@@ -278,7 +278,7 @@ fn helper_permissions_for_test(
     runtime_readable_paths: &[AbsolutePathBuf],
 ) -> FileSystemSandboxPolicy {
     let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).expect("absolute cwd");
-    let cwd = PathUri::from_abs_path(cwd.as_path());
+    let cwd = PathUri::from_abs_path(&cwd);
     let policy = FileSystemSandboxPolicy::restricted(entries);
     let profile =
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
