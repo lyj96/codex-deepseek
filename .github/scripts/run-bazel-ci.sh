@@ -53,11 +53,11 @@ fi
 
 run_bazel() {
   if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-    MSYS2_ARG_CONV_EXCL='*' "$(dirname "${BASH_SOURCE[0]}")/run_bazel_with_buildbuddy.py" "$@"
+    MSYS2_ARG_CONV_EXCL='*' "$(dirname "${BASH_SOURCE[0]}")/run_bazel.py" "$@"
     return
   fi
 
-  "$(dirname "${BASH_SOURCE[0]}")/run_bazel_with_buildbuddy.py" "$@"
+  "$(dirname "${BASH_SOURCE[0]}")/run_bazel.py" "$@"
 }
 
 run_bazel_with_startup_args() {
@@ -254,7 +254,7 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
       ;;
   esac
 fi
-if [[ "${RUNNER_OS:-}" == "Linux" && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+if [[ "${RUNNER_OS:-}" == "Linux" ]]; then
   case "${CODEX_BAZEL_TARGET_TRIPLE:-}" in
     x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl)
       post_config_bazel_args+=(--extra_toolchains=//:linux_gnu_tests_on_gnu_host_toolchain,//:linux_musl_tests_on_gnu_host_toolchain)
@@ -287,7 +287,7 @@ if [[ "${bazel_args[0]}" == "test" && "${RUNNER_OS:-}" == "Linux" && "${GITHUB_A
   # only to an invocation containing this exact single test target.
   post_config_bazel_args+=("--strategy=TestRunner=processwrapper-sandbox")
 fi
-if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 ]]; then
   has_target_platform_override=0
   for arg in "${bazel_args[@]}"; do
     if [[ "$arg" == --platforms=* || "$arg" == --platforms ]]; then
@@ -296,8 +296,7 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUI
     fi
   done
   if [[ $has_target_platform_override -eq 0 && -z "${CODEX_BAZEL_TARGET_TRIPLE:-}" ]]; then
-    # The authenticated cross config normally supplies this target. Retain
-    # gnullvm coverage when the local fallback changes only the host platform.
+    # Retain gnullvm coverage when the native runner selects its MSVC host.
     post_config_bazel_args+=("--platforms=//:windows_x86_64_gnullvm")
   fi
   post_config_bazel_args+=("--extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain")
