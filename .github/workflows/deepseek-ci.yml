@@ -227,7 +227,7 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib external_agent_native_review_preserves_original_plaintext_call --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
-          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::agent_mailbox --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::agent_execution::agent_mailbox --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::abort_tasks --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all queued_mail_and_cancelled_eviction_keep_worker_ownership --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all idle_eviction_preserves_worker_context_for_followup --no-tests fail --retries 0
