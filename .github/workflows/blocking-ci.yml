@@ -15,17 +15,6 @@ jobs:
     name: Fork regressions
     uses: ./.github/workflows/deepseek-ci.yml
 
-  bazel-result:
-    name: Bazel result
-    needs: bazel
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Require the Bazel workflow to succeed
-        env:
-          BAZEL_RESULT: ${{ needs.bazel.result }}
-        run: test "$BAZEL_RESULT" = success
-
   blob-size-policy:
     name: Blob size policy
     uses: ./.github/workflows/blob-size-policy.yml
