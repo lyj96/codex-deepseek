@@ -54,7 +54,7 @@ class WindowsEnvironmentTest(unittest.TestCase):
             env["BUILDBUDDY_API_KEY"] = "test-only-not-a-secret"
         with tempfile.TemporaryDirectory() as directory:
             # Windows checkouts may have CRLF; test the same LF scripts as Linux CI.
-            for name in ("run-bazel-ci.sh", "run_bazel_with_buildbuddy.py"):
+            for name in ("run-bazel-ci.sh", "run_bazel.py"):
                 destination = Path(directory) / name
                 destination.write_text(
                     Path(__file__).with_name(name).read_text(), newline="\n"
@@ -107,6 +107,16 @@ class WindowsEnvironmentTest(unittest.TestCase):
                 self.assertIn(" ".join(args), result.stdout)
                 self.assertNotIn("--host_platform=//:local_windows_msvc", result.stdout)
                 self.assertNotIn("--platforms=//:windows_x86_64_gnullvm", result.stdout)
+
+    def test_legacy_key_keeps_native_windows_execution_identity(self):
+        result = self.invoke(remote=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--host_platform=//:local_windows_msvc", result.stdout)
+        self.assertIn("--action_env=SystemRoot=C:/Windows", result.stdout)
+        self.assertIn("--host_action_env=PROCESSOR_ARCHITECTURE=AMD64", result.stdout)
+        self.assertIn(
+            "--extra_toolchains=//:windows_x86_64_msvc_cc_toolchain", result.stdout
+        )
 
     def test_disposable_disk_cache_default_respects_explicit_overrides(self):
         result = self.invoke(hosted=True)
@@ -236,7 +246,7 @@ class WindowsEnvironmentTest(unittest.TestCase):
             "--extra_toolchains=//:windows_x86_64_msvc_cc_toolchain", result.stdout
         )
         self.assertNotIn("--platforms=//:windows_x86_64_gnullvm", result.stdout)
-        self.assertNotIn("--disk_cache= ", result.stdout)
+        self.assertIn("--disk_cache= ", result.stdout)
 
 
 if __name__ == "__main__":

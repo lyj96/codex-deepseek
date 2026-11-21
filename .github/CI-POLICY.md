@@ -27,7 +27,7 @@ The 0.166.0 package adds `codex-exec-server`. Its native preflight must cover si
 Windows binaries (CLI, app-server, code-mode host, standalone executor, command
 runner and sandbox setup) and four Unix binaries (the first four of that list).
 Build and launch the CLI and standalone executor, plus Linux bubblewrap, before
-tagging. Use the stable repository's Rust 1.95.0 and Node `.nvmrc` pins. Host-reserved
+tagging. Use the stable repository's Rust 1.99.1 and Node `.nvmrc` pins. Host-reserved
 child creation and provider resume/input admission require focused native and
 external-provider regressions; a conflict-free merge does not establish them.
 

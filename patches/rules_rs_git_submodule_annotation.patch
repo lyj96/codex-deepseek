@@ -5,34 +5,26 @@
 diff --git a/rs/extensions.bzl b/rs/extensions.bzl
 --- a/rs/extensions.bzl
 +++ b/rs/extensions.bzl
-@@ -749,6 +749,7 @@
-                         "gen_binaries": {},
-                         "commit": commit,
-                         "hub_name": cfg.name,
-+                        "git_init_submodules": annotation.git_init_submodules,
-                         "patch_args": [],
-                         "patch_tool": "",
-                         "patches": {},
-@@ -765,6 +766,9 @@
-                         repo_name,
-                     ))
+@@ -106,6 +106,8 @@
+             "archive_url": archive_url,
+             "build_annotations": {},
+             "commit": commit,
++            "init_submodules": annotation.git_init_submodules,
++            "recursive_init_submodules": annotation.git_init_submodules,
+             "hub_name": hub.cfg.name,
+             "patch_args": [],
+             "patch_tool": "",
+@@ -125,6 +127,9 @@
+         ))
 
-+                if git_repo["git_init_submodules"] != annotation.git_init_submodules:
-+                    fail("Git crates from %s use incompatible git_init_submodules settings" % source)
+     # Git crates from the same commit share one checkout per hub.
++    if git_repo["init_submodules"] != annotation.git_init_submodules:
++        fail("Git crates from %s use incompatible git_init_submodules settings" % repo_name)
 +
-                 strip_prefix = package.get("strip_prefix")
-                 if strip_prefix == None:
-                     strip_prefix = json.decode(facts[source + "_" + package["name"]])["strip_prefix"]
-@@ -795,6 +799,8 @@
-             build_files = git_repo["build_files"],
-             commit = git_repo["commit"],
-             hub_name = git_repo["hub_name"],
-+            init_submodules = git_repo["git_init_submodules"],
-+            recursive_init_submodules = git_repo["git_init_submodules"],
-             patch_args = git_repo["patch_args"],
-             patch_tool = git_repo["patch_tool"],
-             patches = git_repo["patches"].values(),
-@@ -995,6 +1001,10 @@
+     if annotation.use_git:
+         git_repo["use_git"] = True
+
+@@ -1090,6 +1095,10 @@
          # "shallow_since": attr.string(
          #     doc = "An optional timestamp used for crates originating from a git repository instead of a crate registry. This flag optimizes fetching the source code.",
          # ),
@@ -41,24 +33,36 @@ diff --git a/rs/extensions.bzl b/rs/extensions.bzl
 +            default = True,
 +        ),
          "strip_prefix": attr.string(),
-         "workspace_cargo_toml": attr.string(
-             doc = "For crates from git, the ruleset assumes the (workspace) Cargo.toml is in the repo root. This attribute overrides the assumption.",
+         "use_git": attr.bool(
+             doc = "For a Git crate, fetch the complete Git checkout instead of a GitHub source archive. " +
 diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
 --- a/rs/private/annotations.bzl
 +++ b/rs/private/annotations.bzl
-@@ -23,6 +23,7 @@
+@@ -33,6 +33,7 @@
          patch_args = [],
          patch_tool = None,
          patches = [],
 +        git_init_submodules = True,
          strip_prefix = None,
-         workspace_cargo_toml = "Cargo.toml"):
-     return struct(
-@@ -50,6 +51,7 @@
+         use_git = False,
+         visibility = [Label("//visibility:public")],
+@@ -70,6 +71,7 @@
          patch_args = patch_args,
          patch_tool = patch_tool,
          patches = patches,
 +        git_init_submodules = git_init_submodules,
          strip_prefix = strip_prefix,
-         workspace_cargo_toml = workspace_cargo_toml,
-     )
+         use_git = use_git,
+         visibility = visibility,
+diff --git a/rs/private/git_cargo_workspace_repository.bzl b/rs/private/git_cargo_workspace_repository.bzl
+--- a/rs/private/git_cargo_workspace_repository.bzl
++++ b/rs/private/git_cargo_workspace_repository.bzl
+@@ -71,7 +71,7 @@
+             type = "tar.gz",
+             strip_components = 1,
+         )
+-        if rctx.path(".gitmodules").exists:
++        if rctx.attr.init_submodules and rctx.path(".gitmodules").exists:
+             reason = "the GitHub archive does not contain submodule contents"
+
+     if reason:

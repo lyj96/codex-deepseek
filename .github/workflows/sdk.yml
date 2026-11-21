@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+env:
+  CODEX_BAZEL_GCS_BUCKET: ${{ secrets.CODEX_BAZEL_GCS_BUCKET }}
+  CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER }}
+
 jobs:
   python-sdk-installation:
     runs-on: ubuntu-24.04
@@ -90,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           # Use the shared CI wrapper so fork PRs fall back cleanly when
-          # BuildBuddy credentials are unavailable. This workflow needs the
+          # This workflow needs the
           # built binaries on disk afterwards, so ask the wrapper to override
           # CI's default remote_download_minimal behavior.
           ./.github/scripts/run-bazel-ci.sh \

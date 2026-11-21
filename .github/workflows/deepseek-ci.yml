@@ -23,6 +23,7 @@ jobs:
           python3 .github/scripts/test_free_runners.py
           python3 .github/scripts/check-free-runners.py
           python3 .github/scripts/test_run_bazel_ci_environment.py
+          python3 .github/scripts/test_run_bazel.py
           python3 .github/scripts/test_ci_results.py
       - name: Validate shell installers
         run: |
@@ -161,7 +162,7 @@ jobs:
           CODEX_CLI_PATH="$fake_codex" node "$stage/bin/codex-dp.js" --version \
             | grep -Fx 'fake-codex --version'
       - uses: ./.github/actions/setup-ci
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
           components: rustfmt
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
@@ -226,7 +227,10 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib external_agent_native_review_preserves_original_plaintext_call --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib multi_agent_v2_spawn_personal_role_uses_external_provider_and_plaintext
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all provider_prefix_routes_child_to_external_responses_provider
-          CARGO_BUILD_JOBS=1 just test -p codex-core --test all idle_mail_survives_eviction_and_preserves_followup_order --no-tests fail
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::agent_execution::agent_mailbox --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::abort_tasks --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all queued_mail_and_cancelled_eviction_keep_worker_ownership --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all idle_eviction_preserves_worker_context_for_followup --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all code_mode_spawn_delivers_plaintext --no-tests fail
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all spawn_inherits_first_pending_owner_configuration
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all board_unsubscribe_survives_post_and_resume_until_resubscribed
@@ -347,7 +351,7 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version-file: .nvmrc
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
           targets: x86_64-pc-windows-msvc
       - uses: ./.github/actions/setup-rusty-v8
@@ -422,7 +426,7 @@ jobs:
             -E 'test(=fs_sandbox::tests::sandbox_exec_request_carries_helper_env) | test(=fs_sandbox::tests::sandbox_exec_request_uses_filesystem_root_and_preserves_policy_cwd) | test(=fs_sandbox::tests::sandbox_exec_request_binds_windows_relative_globs_to_policy_cwd)' `
             --retries 0 --no-tests fail
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          just test -p codex-sandboxing --lib --locked --target x86_64-pc-windows-msvc transform_for_direct_spawn_windows_materializes_inner_helper --retries 0 --no-tests fail
+          just test -p codex-sandboxing --lib --locked --target x86_64-pc-windows-msvc windows_file_system_wrapper_materializes_inner_helper --retries 0 --no-tests fail
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           just test -p codex-sandboxing --lib --locked --target x86_64-pc-windows-msvc launch::helper_permissions_ --retries 0 --no-tests fail
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -448,7 +452,7 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version-file: .nvmrc
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
           targets: aarch64-apple-darwin
       - uses: ./.github/actions/setup-rusty-v8
@@ -492,7 +496,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
           targets: x86_64-unknown-linux-musl
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29

@@ -201,14 +201,11 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 fn spawn_agent_tool_caps_visible_model_summaries() {
     let tool = create_spawn_agent_tool_v2(
         SpawnAgentToolOptions {
-            available_models: vec![
-                model_preset("first", /*show_in_picker*/ true),
-                model_preset("second", /*show_in_picker*/ true),
-                model_preset("third", /*show_in_picker*/ true),
-                model_preset("fourth", /*show_in_picker*/ true),
-                model_preset("fifth", /*show_in_picker*/ true),
-                model_preset("sixth", /*show_in_picker*/ true),
-            ],
+            available_models: (0..17)
+                .map(|index| {
+                    model_preset(&format!("visible-{index:02}"), /*show_in_picker*/ true)
+                })
+                .collect(),
             max_model_overrides: MAX_SPAWN_AGENT_MODEL_OVERRIDES,
             agent_type_description: "role help".to_string(),
             expose_agent_type: true,
@@ -225,26 +222,22 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
         panic!("spawn_agent should be a function tool");
     };
 
-    for model in ["first", "second", "third", "fourth", "fifth"] {
+    assert_eq!(MAX_SPAWN_AGENT_MODEL_OVERRIDES, 16);
+    for index in 0..16 {
         assert!(
-            description.contains(&format!("`{model}-model`")),
-            "expected {model} model summary in spawn_agent description: {description:?}"
+            description.contains(&format!("`visible-{index:02}-model`")),
+            "expected model {index} summary in spawn_agent description: {description:?}"
         );
     }
-    assert!(!description.contains("`sixth-model`"));
+    assert!(!description.contains("`visible-16-model`"));
 }
 
 #[test]
 fn spawn_agent_tool_supports_larger_external_model_limit() {
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
-        available_models: vec![
-            model_preset("first", /*show_in_picker*/ true),
-            model_preset("second", /*show_in_picker*/ true),
-            model_preset("third", /*show_in_picker*/ true),
-            model_preset("fourth", /*show_in_picker*/ true),
-            model_preset("fifth", /*show_in_picker*/ true),
-            model_preset("sixth", /*show_in_picker*/ true),
-        ],
+        available_models: (0..17)
+            .map(|index| model_preset(&format!("visible-{index:02}"), /*show_in_picker*/ true))
+            .collect(),
         max_model_overrides:
             crate::tools::handlers::multi_agents_common::MAX_EXTERNAL_SPAWN_AGENT_MODEL_OVERRIDES,
         agent_type_description: "role help".to_string(),
@@ -260,7 +253,12 @@ fn spawn_agent_tool_supports_larger_external_model_limit() {
         panic!("spawn_agent should be a function tool");
     };
 
-    assert!(description.contains("`sixth-model`"));
+    for index in 0..17 {
+        assert!(
+            description.contains(&format!("`visible-{index:02}-model`")),
+            "external model {index} should remain advertised: {description:?}"
+        );
+    }
 }
 
 #[test]
