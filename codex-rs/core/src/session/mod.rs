@@ -4840,7 +4840,9 @@ impl Session {
             .features
             .enabled(Feature::CriticalPathTiming)
         {
-            turn_context.turn_timing_state.invalidate_critical_path();
+            turn_context
+                .turn_timing_state
+                .invalidate_critical_path(&[IncompleteReason::UnsupportedOperation]);
         }
         let response_item = Self::inter_agent_history_item(&communication, &turn_context.config);
         let (mut prepared, _) = self
