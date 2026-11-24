@@ -217,6 +217,9 @@ jobs:
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all model_catalog_refresh_preserves_tools_and_history
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib provider
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent::control
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::guardian_sender_messages --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::scenarios::guardian_sender_context --no-tests fail --retries 0
+          CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::guardian_authorization_refresh --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib agent::host --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --lib thread_spawn::tests --no-tests fail --retries 0
           CARGO_BUILD_JOBS=1 just test -p codex-core --test all suite::scenarios::reserved_spawn --no-tests fail --retries 0
