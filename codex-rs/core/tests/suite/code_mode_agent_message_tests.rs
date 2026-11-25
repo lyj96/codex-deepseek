@@ -46,12 +46,7 @@ async fn code_mode_spawn_delivers_plaintext(external_provider: bool) -> Result<(
         .with_config(move |config| {
             // Isolate task encoding from the fresh child's own environment context.
             config.include_environment_context = false;
-            for feature in [
-                Feature::Collab,
-                Feature::MultiAgentV2,
-                Feature::CodeMode,
-                Feature::CodeModeHostGrpc,
-            ] {
+            for feature in [Feature::Collab, Feature::MultiAgentV2, Feature::CodeMode] {
                 config
                     .features
                     .enable(feature)
